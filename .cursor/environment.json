@@ -1,0 +1,5 @@
+{
+  "name": "Unify SDK",
+  "install": "./.cursor/scripts/cloud-agent-install.sh",
+  "start": "./.cursor/scripts/cloud-agent-start.sh"
+}
