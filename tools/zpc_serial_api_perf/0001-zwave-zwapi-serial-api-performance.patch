@@ -1,0 +1,394 @@
+--- a/applications/zpc/components/zwave/zwave_tx/src/zwave_tx_process.cpp
++++ b/applications/zpc/components/zwave/zwave_tx/src/zwave_tx_process.cpp
+@@ -332,6 +332,15 @@
+     return;
+   }
+ 
++  // When a multi-hop route is already cached, ask the API transport to skip
++  // Explore so we reuse AUTO_ROUTE and free Serial API / RF sooner.
++  if ((current_element.connection_info.remote.is_multicast == false)
++      && (zwave_tx_route_cache_get_number_of_repeaters(
++            current_element.connection_info.remote.node_id)
++          > 0)) {
++    current_element.options.transport.omit_explore = true;
++  }
++
+   // Ask the transports to take the frame.
+   sl_status_t transport_status = zwave_controller_transport_send_data(
+     &(current_element.connection_info),
+@@ -345,19 +354,34 @@
+   if (transport_status == SL_STATUS_OK) {
+     tx_queue.set_transmission_timestamp(current_tx_session_id);
+     return;
+-  } else {
+-    // Here we are going to get into a stall...
+-    // Can happen e.g. if the transport tries to queue more but the Tx Queue
+-    // just refused the frame.
+-    // Or the transport cannot handle the new frame
+-    // Discard the "Excess" frames for now.
+-    sl_log_warning(LOG_TAG,
+-                   "Transport cannot handle new frame (id=%p). "
+-                   "Discarding to avoid a stall.",
+-                   current_tx_session_id);
+-    zwave_tx_drop_unsent_current_message();
++  }
++
++  // Transient transport/Serial API busy: keep the frame queued and retry after
++  // a short back-off. Dropping here forces upper layers to re-enqueue and
++  // wastes Serial API bandwidth under load.
++  if (transport_status == SL_STATUS_BUSY) {
++    sl_log_debug(LOG_TAG,
++                 "Transport busy for frame (id=%p). Deferring instead of "
++                 "discarding.",
++                 current_tx_session_id);
++    // We entered TRANSMISSION_ONGOING before the send attempt; roll back to
++    // IDLE so the short back-off can re-arm SEND_NEXT_MESSAGE.
++    state = ZWAVE_TX_STATE_IDLE;
++    // 20 ms: long enough to avoid a tight Contiki spin, short enough to keep
++    // the Serial API busy with useful work once the transport frees up.
++    zwave_tx_process_initiate_backoff(CLOCK_SECOND / 50,
++                                      BACKOFF_PROTOCOL_SENDING_FRAMES);
+     return;
+   }
++
++  // Permanent refusal (queue full inside a transport, unsupported frame, ...)
++  // Discard to avoid a stall on a frame that cannot be sent as-is.
++  sl_log_warning(LOG_TAG,
++                 "Transport cannot handle new frame (id=%p, status=0x%lx). "
++                 "Discarding to avoid a stall.",
++                 current_tx_session_id,
++                 (unsigned long)transport_status);
++  zwave_tx_drop_unsent_current_message();
+ }
+ 
+ /**
+--- a/applications/zpc/components/zwave/zwave_transports/zwave_api_transport/src/zwave_api_transport.c
++++ b/applications/zpc/components/zwave/zwave_transports/zwave_api_transport/src/zwave_api_transport.c
+@@ -104,7 +104,8 @@
+ static sl_status_t zwave_api_transport_intercept_payload(
+   const zwave_controller_connection_info_t *info,
+   uint16_t data_length,
+-  const uint8_t *data)
++  const uint8_t *data,
++  const zwave_tx_options_t *tx_options)
+ {
+   if (info->remote.is_multicast == true) {
+     return SL_STATUS_NOT_SUPPORTED;
+@@ -116,8 +117,14 @@
+ 
+   // Intercept NOPs and try to use the Z-Wave API for it
+   if (data[COMMAND_CLASS_INDEX] == ZWAVE_NOP_COMMAND_CLASS) {
+-    uint8_t zwapi_tx_options = TRANSMIT_OPTION_ACK | TRANSMIT_OPTION_AUTO_ROUTE
+-                               | TRANSMIT_OPTION_EXPLORE;
++    // Prefer AUTO_ROUTE without Explore when Tx marked omit_explore (known
++    // multi-hop route). Explore burns significant RF airtime and holds the
++    // single Serial API SendData session much longer than a routed retry.
++    uint8_t zwapi_tx_options
++      = TRANSMIT_OPTION_ACK | TRANSMIT_OPTION_AUTO_ROUTE;
++    if (tx_options == NULL || tx_options->transport.omit_explore == false) {
++      zwapi_tx_options |= TRANSMIT_OPTION_EXPLORE;
++    }
+     sl_status_t status = zwapi_send_nop(info->remote.node_id,
+                                         zwapi_tx_options,
+                                         &zwave_api_send_data_callback);
+@@ -293,7 +300,10 @@
+ 
+   // Is it something special like a Request NIF, send NOP?
+   if (SL_STATUS_OK
+-      == zwave_api_transport_intercept_payload(info, data_length, data)) {
++      == zwave_api_transport_intercept_payload(info,
++                                               data_length,
++                                               data,
++                                               tx_options)) {
+     // Mark that we are busy transmitting and return
+     state.remote_node_id = info->remote.node_id;
+     zwave_api_transport_start_transmission(on_send_data_complete,
+@@ -311,9 +321,14 @@
+       // Singlecast are sent with Ack Request.
+       zwapi_tx_options = TRANSMIT_OPTION_ACK;
+       if (tx_options->fasttrack == false) {
+-        // Route resolution only if not in "fasttrack" mode
+-        zwapi_tx_options
+-          |= TRANSMIT_OPTION_AUTO_ROUTE | TRANSMIT_OPTION_EXPLORE;
++        // Route resolution only if not in "fasttrack" mode.
++        // Skip Explore when Tx marked omit_explore (cached multi-hop route) —
++        // Explore is reserved for first contact / route repair and is a major
++        // airtime + Serial API occupancy cost.
++        zwapi_tx_options |= TRANSMIT_OPTION_AUTO_ROUTE;
++        if (tx_options->transport.omit_explore == false) {
++          zwapi_tx_options |= TRANSMIT_OPTION_EXPLORE;
++        }
+       }
+ 
+       // Save the session state
+--- a/applications/zpc/components/zwave/zwave_definitions/include/zwave_tx_definitions.h
++++ b/applications/zpc/components/zwave/zwave_definitions/include/zwave_tx_definitions.h
+@@ -121,6 +121,12 @@
+   /// with a particular Tx Power. This value will be ignored if the
+   /// is_test_frame flag is set to false.
+   rf_power_level_t rf_power;
++
++  /// When true, the Z-Wave API transport omits TRANSMIT_OPTION_EXPLORE and
++  /// relies on AUTO_ROUTE only. Set by \ref zwave_tx when a multi-hop route
++  /// is already cached for the destination. Default (false) keeps legacy
++  /// Explore behavior for first contact / unknown routes.
++  bool omit_explore;
+ } zwave_tx_transport_options_t;
+ 
+ typedef struct zwave_tx_options {
+--- a/applications/zpc/components/zwave_api/src/zwapi_session.c
++++ b/applications/zpc/components/zwave_api/src/zwapi_session.c
+@@ -16,6 +16,7 @@
+ #include <stdlib.h>
+ #include "zwapi_session.h"
+ #include "zwapi_connection.h"
++#include "zwapi_serial.h"
+ #include "zwapi_timestamp.h"
+ #include "sl_log.h"
+ 
+@@ -24,11 +25,13 @@
+ #define TIMEOUT_TIME 1600
+ // This number should be higher than the MAX_TRANSMISSION_RETRIES
+ #define MAX_RX_QUEUE_LENGTH 30
+-// CLEANUP: MAX_TRANSMISSION_RETRIES used to be 20 in send_frame()
+-// Find out what our strategy should be, INS12350 says it should be 3
+-#define MAX_TRANSMISSION_RETRIES           20
++// INS12350 recommends 3 transmission retries with backoff 100 + i * 1000 ms.
++#define MAX_TRANSMISSION_RETRIES           3
+ #define MAX_RX_FRAMES_WAITING_FOR_RESPONSE 3
+ #define MAX_TX_TIMEOUTS                    3
++// Cap INS12350 backoff so a dead NCP cannot stall the host for many seconds
++// per attempt, while still avoiding the previous 20 ms spin-storm.
++#define MAX_RETRANSMISSION_BACKOFF_MS      500
+ 
+ typedef struct list_elem {
+   struct list_elem *next;
+@@ -58,7 +61,6 @@
+ /**
+ * Enqueue a new element in the zwapi_session_rx_queue from the zwapi_connection
+ * buffer. Only REQUEST type frames will be enqueued, others will be ignored
+-* TODO: Get rid of malloc
+ *****************************************************************************/
+ static void zwapi_session_enqueue_frame(void)
+ {
+@@ -67,36 +69,49 @@
+     sl_log_error(LOG_TAG, "Rx queue is full! Aborting\n");
+     return;
+   }
++  // Peek length so we allocate only what we need (avoids a 255-byte malloc
++  // for every tiny ACK'd REQ under load).
++  uint8_t peek_buf[FRAME_LENGTH_MAX];
++  uint8_t frame_len
++    = zwapi_connection_get_last_rx_frame(peek_buf, FRAME_LENGTH_MAX);
++  if (frame_len < FRAME_LENGTH_MIN) {
++    return;
++  }
++
+   new_elem
+     = (zwapi_session_list_elem_t *)malloc(sizeof(zwapi_session_list_elem_t));
+-  new_elem->data = malloc(FRAME_LENGTH_MAX * sizeof(uint8_t));
++  if (new_elem == NULL) {
++    sl_log_error(LOG_TAG, "Failed to allocate Rx queue element\n");
++    return;
++  }
++  new_elem->data = malloc(frame_len * sizeof(uint8_t));
++  if (new_elem->data == NULL) {
++    free(new_elem);
++    sl_log_error(LOG_TAG, "Failed to allocate Rx frame buffer\n");
++    return;
++  }
+   new_elem->next = NULL;
+-  new_elem->len
+-    = zwapi_connection_get_last_rx_frame(new_elem->data, FRAME_LENGTH_MAX);
++  memcpy(new_elem->data, peek_buf, frame_len);
++  new_elem->len = frame_len;
+ 
+   // Verify that this is a REQUEST frame (RESPONSES are not queued here)
+-  if (new_elem->len >= IDX_TYPE + 1) {
+-    if (new_elem->data[IDX_TYPE] == FRAME_TYPE_REQUEST) {
+-      // Add frame to end of queue
+-      if (zwapi_session_rx_queue != NULL) {
+-        zwapi_session_list_elem_t *e;
+-        for (e = zwapi_session_rx_queue; e->next; e = e->next) {
+-          // Nothing here. Just iterating to the end of the queue.
+-        }
+-        e->next = new_elem;
+-      } else {
+-        zwapi_session_rx_queue = new_elem;
++  if (new_elem->data[IDX_TYPE] == FRAME_TYPE_REQUEST) {
++    // Add frame to end of queue
++    if (zwapi_session_rx_queue != NULL) {
++      zwapi_session_list_elem_t *e;
++      for (e = zwapi_session_rx_queue; e->next; e = e->next) {
++        // Nothing here. Just iterating to the end of the queue.
+       }
+-      // Make an additional poll request to ensure
+-      // that are no pending frames unread.
+-      if (zwave_api_get_callbacks()->poll_request) {
+-        zwave_api_get_callbacks()->poll_request();
+-      }
+-    } else {  // it is a RESPONSE (or other?) frame type, do not enqueue
+-      free(new_elem->data);
+-      free(new_elem);
++      e->next = new_elem;
++    } else {
++      zwapi_session_rx_queue = new_elem;
++    }
++    // Make an additional poll request to ensure
++    // that are no pending frames unread.
++    if (zwave_api_get_callbacks()->poll_request) {
++      zwave_api_get_callbacks()->poll_request();
+     }
+-  } else {  // Frame is too short, this should never happen
++  } else {  // it is a RESPONSE (or other?) frame type, do not enqueue
+     free(new_elem->data);
+     free(new_elem);
+   }
+@@ -123,6 +138,10 @@
+       connection_status = ZWAPI_CONNECTION_STATUS_RX_TIMEOUT;
+       break;
+     }
++
++    // Sleep until UART data arrives (or a short slice of the remaining
++    // timeout) instead of busy-spinning on zero-wait select().
++    zwapi_serial_wait_for_data(5);
+   }
+   return connection_status;
+ }
+@@ -219,9 +238,16 @@
+         break;
+ 
+       case ZWAPI_CONNECTION_STATUS_RX_TIMEOUT:
+-        // Nothing special to do here, we are missing an Ack.
+-        // Try again without back-off
+-        continue;
++        // Silence while waiting for ACK also counts toward dead-port recovery.
++        // Previously this path retried without counting and never reopened.
++        consecutive_tx_timeout_count++;
++        sl_log_warning(LOG_TAG, "Timed out waiting for ACK (rx idle)\n");
++        if (consecutive_tx_timeout_count >= MAX_TX_TIMEOUTS) {
++          sl_log_warning(LOG_TAG, "Reopening serial port\n");
++          zwapi_connection_restart();
++          return SL_STATUS_FAIL;
++        }
++        break;
+ 
+       case ZWAPI_CONNECTION_STATUS_TX_NAK:
+         // The other end is unhappy about our frame.
+@@ -241,13 +267,20 @@
+                  MAX_TRANSMISSION_RETRIES,
+                  command);
+ 
+-    /*TODO consider to use an exponential backoff, and do not backoff until our own framehandler is idle. Also
+-      * the magnitude of the backoff seem very large... this is to be analyzed. */
+-    // CLEANUP: INS12350 says it should be 100 + i * 1000. But this is probably not doable here.
++    // INS12350 suggests 100 + i * 1000 ms. Cap the wait so a flaky link does
++    // not stall Contiki for seconds per retry, and drain inbound REQs while
++    // waiting (event-driven, not a busy spin).
++    int backoff_ms = 100 + (i * 1000);
++    if (backoff_ms > MAX_RETRANSMISSION_BACKOFF_MS) {
++      backoff_ms = MAX_RETRANSMISSION_BACKOFF_MS;
++    }
+     static zwapi_timestamp_t session_timer;
+-    zwapi_timestamp_get(&session_timer, 20);
++    zwapi_timestamp_get(&session_timer, backoff_ms);
+     while (!zwapi_is_timestamp_elapsed(&session_timer)) {
+       zwapi_session_enqueue_rx_frames();
++      if (!zwapi_is_timestamp_elapsed(&session_timer)) {
++        zwapi_serial_wait_for_data(5);
++      }
+     }
+   }
+ 
+--- a/applications/zpc/components/zwave_api/src/zwapi_connection.c
++++ b/applications/zpc/components/zwave_api/src/zwapi_connection.c
+@@ -179,12 +179,12 @@
+               retVal         = ZWAPI_CONNECTION_STATUS_TX_CAN;
+               ack_nak_needed = false;
+             } else {
++              // Noise/out-of-sync bytes while waiting for ACK must not abort
++              // the wait as TX_TIMEOUT — keep hunting until ACK timeout fires.
+               sl_log_warning(
+                 LOG_TAG,
+                 "Frame parsing received unexpected value (0x%02X). Ignoring\n",
+                 c);
+-              retVal         = ZWAPI_CONNECTION_STATUS_TX_TIMEOUT;
+-              ack_nak_needed = false;
+             }
+           }
+         }
+@@ -257,6 +257,17 @@
+       }
+     }
+   }
++
++  // ACK/RX timeouts must also be evaluated when the UART is idle. Previously
++  // these checks lived only inside the select-ready loop, so a silent NCP
++  // never triggered TX_TIMEOUT from the connection layer.
++  if (retVal == ZWAPI_CONNECTION_STATUS_IDLE) {
++    if (ack_nak_needed && zwapi_is_timestamp_elapsed(&timeOutACK)) {
++      ack_nak_needed = false;
++      retVal         = ZWAPI_CONNECTION_STATUS_TX_TIMEOUT;
++    }
++  }
++
+   return retVal;
+ }
+ 
+--- a/applications/zpc/components/zwave_api/src/zwapi_serial.h
++++ b/applications/zpc/components/zwave_api/src/zwapi_serial.h
+@@ -103,6 +103,16 @@
+ bool zwapi_serial_is_file_available(void);
+ 
+ /**
++ * @brief Block until the serial device has data ready or the timeout expires.
++ *
++ * @param timeout_ms Maximum time to wait in milliseconds. 0 polls once.
++ * @returns true if data is available, false on timeout or error.
++ *
++ * Used by the session layer to avoid busy-spinning while waiting for ACK/RES.
++ */
++bool zwapi_serial_wait_for_data(int timeout_ms);
++
++/**
+  * @brief Flush the serial output if using buffered output.
+  *
+  * This function calls tcdrain, which waits that the TTY buffer data has been
+--- a/applications/zpc/components/zwave_api/platform/posix/zwapi_serial.c
++++ b/applications/zpc/components/zwave_api/platform/posix/zwapi_serial.c
+@@ -288,21 +288,29 @@
+ 
+ bool zwapi_serial_is_file_available(void)
+ {
++  return zwapi_serial_wait_for_data(0);
++}
++
++bool zwapi_serial_wait_for_data(int timeout_ms)
++{
+   fd_set rfds;
+   struct timeval tv;
+   int retval;
+ 
++  if (serial_fd < 0) {
++    return false;
++  }
++
+   FD_ZERO(&rfds);
+   FD_SET(serial_fd, &rfds);
+ 
+-  // From the manpage:
+-  // If both fields of the timeval structure are zero, then
+-  // select() returns immediately.  (This is useful for polling.)
+-  tv.tv_sec  = 0;
+-  tv.tv_usec = 0;
++  if (timeout_ms < 0) {
++    timeout_ms = 0;
++  }
++  tv.tv_sec  = timeout_ms / 1000;
++  tv.tv_usec = (timeout_ms % 1000) * 1000;
+ 
+   retval = select(serial_fd + 1, &rfds, NULL, NULL, &tv);
+-  // Don't rely on the value of tv now!
+   if (retval == -1) {
+     perror("select()");
+     return false;
