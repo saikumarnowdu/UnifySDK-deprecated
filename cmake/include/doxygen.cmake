@@ -187,29 +187,48 @@ if(DOXYGEN_FOUND)
     ${CMAKE_SOURCE_DIR}/doc/doxygen
     ${LIBUIC_DOXYGEN_SRC})
   # ############################################################################
-  # Configure Doxygen for ZPC
+  # Configure Doxygen for ZPC technical reference (standalone docs)
   # ############################################################################
-  # The aliases syntax are pretty ugly. Want to use DOXYGEN_VERBATIM_VARS
-  # feature but it's only available with CMake v3.11+ set(DOXYGEN_ALIASES
-  # "serial_rx{1}=> *Serial API (ZW &rarr\; host):*&nbsp\;&nbsp\; `\\1`<br/>"
-  # "serial_tx{1}=> *Serial API (host &rarr\; ZW):*&nbsp\;&nbsp\; `\\1`<br/>"
-  # "zgw_name=\"@xrefitem zgw_namemap \\\"\\\" \\\"\\\"\"")
   add_doxygen_target(
     TARGET
-    doxygen_zpc
+    doxygen_zpc_reference
     PROJECT_NAME
-    "Z-Wave Protocol Controller Refrence"
+    "Z-Wave Protocol Controller Reference"
     IMAGE_PATHS
     doc/assets/img/
-    applications/zpc/doc/assets/img/
-    PLANTUML_PATHS
-    applications/zpc/doc/assets/plantuml/
     SRC_PATHS
-    ${CMAKE_BINARY_DIR}/applications/zpc/components/zwave_command_classes/src-gen
-    applications/zpc/components
-    ${LIBUIC_DOXYGEN_SRC})
+    ${CMAKE_SOURCE_DIR}/doc/zpc-reference)
 
-  unset(DOXYGEN_ALIASES)
+  # ############################################################################
+  # Configure Doxygen for ZPC API (requires applications/zpc source)
+  # ############################################################################
+  if(EXISTS ${CMAKE_SOURCE_DIR}/applications/zpc/CMakeLists.txt)
+    # The aliases syntax are pretty ugly. Want to use DOXYGEN_VERBATIM_VARS
+    # feature but it's only available with CMake v3.11+ set(DOXYGEN_ALIASES
+    # "serial_rx{1}=> *Serial API (ZW &rarr\; host):*&nbsp\;&nbsp\; `\\1`<br/>"
+    # "serial_tx{1}=> *Serial API (host &rarr\; ZW):*&nbsp\;&nbsp\; `\\1`<br/>"
+    # "zgw_name=\"@xrefitem zgw_namemap \\\"\\\" \\\"\\\"\"")
+    add_doxygen_target(
+      TARGET
+      doxygen_zpc
+      PROJECT_NAME
+      "Z-Wave Protocol Controller API"
+      IMAGE_PATHS
+      doc/assets/img/
+      applications/zpc/doc/assets/img/
+      PLANTUML_PATHS
+      applications/zpc/doc/assets/plantuml/
+      SRC_PATHS
+      ${CMAKE_BINARY_DIR}/applications/zpc/components/zwave_command_classes/src-gen
+      applications/zpc/components
+      ${LIBUIC_DOXYGEN_SRC})
+    unset(DOXYGEN_ALIASES)
+  else()
+    message(
+      STATUS
+        "applications/zpc not found — skipping doxygen_zpc API target (use doxygen_zpc_reference)"
+    )
+  endif()
 
 else()
   message(
