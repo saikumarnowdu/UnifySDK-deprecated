@@ -1,8 +1,11 @@
 # ZPC Serial API performance patch
 
-Patch produced from a performance review of **zwave** / **zwapi** Serial API
-utilization (see
-`doc/protocol/zwave/zwave_zwapi_serial_performance_review.md`).
+Patch produced from the performance reviews of **zwave** / **zwapi** Serial API
+utilization:
+
+- [reviews/zwapi_serial_api_performance.md](../../reviews/zwapi_serial_api_performance.md)
+- [reviews/zwave_tx_rx_performance.md](../../reviews/zwave_tx_rx_performance.md)
+- [reviews/README.md](../../reviews/README.md)
 
 ## Apply
 

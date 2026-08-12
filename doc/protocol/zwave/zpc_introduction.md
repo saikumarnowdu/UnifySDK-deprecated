@@ -7,7 +7,8 @@ The Z-wave protocol controller(ZPC) that implements Z-Wave functionality is move
 
 ## Serial API performance notes
 
-For a review of **zwave** / **zwapi** Serial API bandwidth utilization (and a
-patch applicable to `ver_1.6.0` ZPC sources), see
-[zwave_zwapi_serial_performance_review.md](zwave_zwapi_serial_performance_review.md)
-and `tools/zpc_serial_api_perf/`.
+For reviews of **zwave** / **zwapi** Serial API bandwidth utilization (and a
+patch applicable to `ver_1.6.0` ZPC sources), see:
+
+- [reviews/](../../../reviews/README.md) — zwapi + zwave performance reviews
+- `tools/zpc_serial_api_perf/` — applyable patch kit
