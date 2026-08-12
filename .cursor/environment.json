@@ -1,5 +1,5 @@
 {
-  "name": "Unify SDK",
+  "name": "Unify SDK (arm64)",
   "install": "./.cursor/scripts/cloud-agent-install.sh",
   "start": "./.cursor/scripts/cloud-agent-start.sh"
 }

@@ -14,7 +14,8 @@ docker_cmd() {
   fi
 }
 
-image_tag="uic_amd64"
+image_tag="uic_arm64"
+build_dir="build-arm64"
 
 if [[ $# -eq 0 ]]; then
   set -- bash
@@ -23,5 +24,6 @@ fi
 docker_cmd run --rm -it --network host \
   -v "${repo_root}:${repo_root}" \
   -w "${repo_root}" \
+  -e "HEADLESS_HOST=true" \
   "${image_tag}" \
   "$@"
