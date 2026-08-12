@@ -58,3 +58,14 @@ target_add_unittest(
   uic_contiki_stub
   EXCLUDE
   src/attribute_resolver_rule.cpp)
+
+# Z-Wave-shaped load benchmark (200 nodes, mocked TX queue)
+target_add_unittest(
+  uic_attribute_resolver_shared
+  NAME
+  zwave_load_benchmark_test
+  SOURCES
+  zwave_load_benchmark_test.c
+  DEPENDS
+  uic_contiki_stub
+  uic_log)
