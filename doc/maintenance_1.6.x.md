@@ -32,7 +32,7 @@ components that were removed or moved in 1.7.0:
 
 | Component | 1.6.x (`release/1.6.x`) | 1.7.0 (`main`) |
 | --------- | ----------------------- | -------------- |
-| ZPC | In-repo (`applications/zpc/`) | Separate [z-wave-protocol-controller](https://github.com/SiliconLabsSoftware/z-wave-protocol-controller) repo |
+| ZPC | In-repo (`applications/zpc/`) | Separate [z-wave-protocol-controller-legacy](https://github.com/SiliconLabsSoftware/z-wave-protocol-controller-legacy) repo |
 | ZigPC | Included | Removed |
 | Zigbeed | Included | Removed |
 | AoXPC | Included | Removed |
@@ -209,11 +209,11 @@ Does the component still exist on release/1.6.x?
 ### ZPC note
 
 In 1.7.0, ZPC is maintained in a
-[separate repository](https://github.com/SiliconLabsSoftware/z-wave-protocol-controller).
-On the 1.6.x line, continue using in-repo ZPC at `applications/zpc/`. To
-bring in ZPC fixes from the external repo, port them manually — do not
-replace in-repo ZPC with the external repo without a full migration plan
-(that migration is effectively a move to 1.7.0+).
+[separate repository](https://github.com/SiliconLabsSoftware/z-wave-protocol-controller-legacy)
+(renamed from `z-wave-protocol-controller`). On the 1.6.x line, continue using
+in-repo ZPC at `applications/zpc/`. To bring in ZPC fixes from the external
+repo, port them manually — do not replace in-repo ZPC with the external repo
+without a full migration plan (that migration is effectively a move to 1.7.0+).
 
 ## Deployment options for 1.6.x
 
@@ -259,7 +259,9 @@ Before porting general 1.7.0 features, review the ZPC fix audit:
 
 That document lists which 1.6.0 ZPC fixes are already present, known open
 issues (including UIC-3335 TX queue lock), security items, and recommended
-port order from upstream PRs and the external z-wave-protocol-controller repo.
+port order from upstream PRs and the external
+[z-wave-protocol-controller-legacy](https://github.com/SiliconLabsSoftware/z-wave-protocol-controller-legacy)
+repo.
 
 ## Related documentation
 

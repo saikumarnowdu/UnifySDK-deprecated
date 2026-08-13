@@ -13,9 +13,9 @@ Related guides:
 
 - **In scope:** In-repo ZPC at `applications/zpc/` on `release/1.6.x`
 - **Out of scope for direct cherry-pick:** External
-  [z-wave-protocol-controller](https://github.com/SiliconLabsSoftware/z-wave-protocol-controller)
-  repo (used from Unify 1.7.0 onward). Fixes there must be ported manually into
-  the 1.6.x ZPC tree.
+  [z-wave-protocol-controller-legacy](https://github.com/SiliconLabsSoftware/z-wave-protocol-controller-legacy)
+  repo (formerly `z-wave-protocol-controller`; used from Unify 1.7.0 onward).
+  Fixes there must be ported manually into the 1.6.x ZPC tree.
 
 Audit date: August 2026. Upstream references: `SiliconLabs/UnifySDK` on GitHub.
 
@@ -80,7 +80,7 @@ applications/zpc/components/zwave/zwave_tx/test/zwave_tx_test.c
 
 | CVE | Affected | Fixed in (external ZPC) | Notes |
 | --- | -------- | ----------------------- | ----- |
-| [CVE-2025-10933](https://nvd.nist.gov/vuln/detail/CVE-2025-10933) | ZPC &lt; 1.7.1 | External repo `ver_1.7.1+` | Integer underflow → out-of-bounds read. **1.6.x is affected.** Locate and port the specific fix from the external z-wave-protocol-controller release. |
+| [CVE-2025-10933](https://nvd.nist.gov/vuln/detail/CVE-2025-10933) | ZPC &lt; 1.7.1 | [z-wave-protocol-controller-legacy](https://github.com/SiliconLabsSoftware/z-wave-protocol-controller-legacy) `ver_1.7.1+` | Integer underflow → out-of-bounds read. **1.6.x is affected.** Locate and port the specific fix from that repo's release. |
 
 ### Long-standing known issues (no upstream fix found)
 
@@ -124,8 +124,8 @@ Between `ver_1.6.0` and `ver_1.7.0`, ZPC was **removed** from UnifySDK
 ZPC fix commits** in UnifySDK after 1.6.0 — only removal.
 
 Post-1.6.0 ZPC development continues in the external
-**z-wave-protocol-controller** repository (releases such as `ver_1.7.1`,
-`ver_1.8.0`). To port those fixes:
+**[z-wave-protocol-controller-legacy](https://github.com/SiliconLabsSoftware/z-wave-protocol-controller-legacy)**
+repository (releases such as `ver_1.7.1`, `ver_1.8.0`). To port those fixes:
 
 1. Identify the fix in the external repo (release notes or commit).
 2. Map the change to the equivalent path under `applications/zpc/` on
