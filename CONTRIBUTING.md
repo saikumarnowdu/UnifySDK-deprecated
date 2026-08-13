@@ -1,5 +1,19 @@
 # Contributing to UnifySDK
 
+## Release branch maintenance (1.6.x product line)
+
+If you maintain a long-lived **1.6.x** product line while `main` tracks the
+latest SDK (1.7.0+), use the dedicated guide:
+
+**[Maintaining the Unify SDK 1.6.x Product Line](doc/maintenance_1.6.x.md)**
+
+That document covers:
+
+- The `release/1.6.x` branch model and version numbering
+- Patch release checklists and build steps
+- How to port selected fixes and features from newer releases without merging `main`
+- Deployment and compatibility rules for matched 1.6.x package sets
+
 ## Reporting issues
 
 Currently there is no way to report issue in the github project,
@@ -16,7 +30,8 @@ If the change refers to existing context id, feel free to add it.
 | Sl No | Type of Branch | Use Case | Example |
 | ----- | -------------- | -------- |-------- |
 | 1 | Feature Branches | For developing new features or functionalities. These branches are often used for longer-lived work and may be merged into the main branch when completed. |feature/user-authentication
-| 2 | Bugfix Branches | For addressing specific issues or bugs. Bugfix branches are created to isolate and fix a problem, and they're often merged back into the main branch (or a release branch) once the fix is verified. | bugfix/GH-1234-fix-for-UMB-crash
+| 2 | Bugfix Branches | For addressing specific issues or bugs. Bugfix branches are created to isolate and fix a problem, and they're often merged back into the main branch (or a release branch) once the fix is verified. | bugfix/GH-1234-fix-for-UMB-crash |
+| 2b | 1.6.x maintenance branches | For fixes and ports on the `release/1.6.x` product line. See [maintenance_1.6.x.md](doc/maintenance_1.6.x.md). | bugfix/1.6.x/GH-1234-gms-crash |
 | 3 | Experimental Branches | For highly experimental or uncertain work that may or may not make it into the main codebase. These branches allow team members to collaborate on new ideas without affecting the main development flow | experimental/GH-1234-migration-of-core
 | 4 | Documentation Branches | For creating or updating documentation, such as README files, user guides, or API documentation. Separate documentation branches make it easier to manage documentation changes independently from code changes | docs/GH-1234-updates-readme
 | 5 | Refactoring Branches | For making significant changes to the codebase that don't add new features or fix bugs but improve the code's structure, readability, or maintainability. Separate refactoring branches help keep refactoring efforts organized | refactor/GH-1234-refactors-authentication-module
