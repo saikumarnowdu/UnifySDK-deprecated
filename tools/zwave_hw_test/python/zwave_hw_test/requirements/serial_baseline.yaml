@@ -1,0 +1,28 @@
+# Baseline bring-up checks — no UCL, direct Serial API / zwapi.
+defaults:
+  poll_timeout_s: 30
+
+requirements:
+  - name: serial_api_version
+    action: get_version
+
+  - name: protocol_version_readable
+    action: get_protocol_version
+
+  - name: controller_library
+    action: library_type
+  # ZWAVE_LIBRARY_TYPE_CONTROLLER = 0x02
+    expected: 2
+
+  - name: zw_get_version_frame
+    action: send_frame
+    func_id: 0x15
+    # Response layout varies by NCP; only assert non-empty if you customize.
+
+  - name: nop_to_node
+    action: send_nop
+    node_id: 2
+    tx_options: 1
+    wait_tx: true
+    # TRANSMIT_COMPLETE_OK = 0x00 — customize per network
+    # expect_tx_status: 0
