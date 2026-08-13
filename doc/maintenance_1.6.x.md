@@ -251,9 +251,20 @@ packages under `portable_runtime_<OS>/resources/docker-files/` with your
 | Use SDK version `#ifdef`s to target 1.6.x from `main` | No — not supported by the codebase |
 | Mix 1.6.x `libunify` with 1.7.0 services | No |
 
+## ZPC fixes (check before porting other features)
+
+Before porting general 1.7.0 features, review the ZPC fix audit:
+
+**[ZPC Fixes Audit for the 1.6.x Product Line](zpc_fixes_audit_1.6.x.md)**
+
+That document lists which 1.6.0 ZPC fixes are already present, known open
+issues (including UIC-3335 TX queue lock), security items, and recommended
+port order from upstream PRs and the external z-wave-protocol-controller repo.
+
 ## Related documentation
 
 - [CONTRIBUTING.md](../CONTRIBUTING.md) — branch naming, commits, PRs, tests
+- [zpc_fixes_audit_1.6.x.md](zpc_fixes_audit_1.6.x.md) — ZPC fix status and port priorities
 - [release_notes.md](release_notes.md) — shared component changelog
 - [readme_building.md](readme_building.md) — build and package instructions
 - [getting_started.md](getting_started.md) — installing `.deb` packages
