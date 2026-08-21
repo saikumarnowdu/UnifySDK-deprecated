@@ -231,17 +231,37 @@ void on_resolver_send_data_complete(resolver_send_status_t status,
   switch (status) {
     case RESOLVER_SEND_STATUS_OK:
       if (rule_type == RESOLVER_SET_RULE) {
-        // We need to update the reported value, undefine it to trigger
-        // a get rule.
-        attribute_store_undefine_reported(node);
         if (needs_more_frames == false) {
+          bool all_matched = true;
           for (attribute_store::attribute a:
                attribute_resolver_rule_get_group_nodes(rule_type, node)) {
-            // Now we can align the reported to the desired value
-            a.clear_reported();
-            a.clear_desired();
-            attribute_store_log_node(node, false);
+            if (!attribute_store_is_value_matched(a)) {
+              all_matched = false;
+              break;
+            }
           }
+          if (all_matched) {
+            // A no-supervision SET reply may already have updated reported via
+            // the RX path. Avoid undefining reported and issuing a GET.
+            for (attribute_store::attribute a:
+                 attribute_resolver_rule_get_group_nodes(rule_type, node)) {
+              a.set_reported(a.desired_or_reported<std::vector<uint8_t>>());
+              a.clear_desired();
+              attribute_store_log_node(a, false);
+            }
+          } else {
+            // We need to update the reported value, undefine it to trigger
+            // a get rule.
+            attribute_store_undefine_reported(node);
+            for (attribute_store::attribute a:
+                 attribute_resolver_rule_get_group_nodes(rule_type, node)) {
+              a.clear_reported();
+              a.clear_desired();
+              attribute_store_log_node(node, false);
+            }
+          }
+        } else {
+          attribute_store_undefine_reported(node);
         }
       }
       break;
