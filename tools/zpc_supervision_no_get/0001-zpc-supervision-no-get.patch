@@ -1,0 +1,44 @@
+--- a/components/attribute_resolver/src/zpc_attribute_resolver_callbacks.cpp
++++ b/components/attribute_resolver/src/zpc_attribute_resolver_callbacks.cpp
+@@ -119,7 +119,11 @@
+     resolver_send_status_t rs;
+     switch (status) {
+         case TRANSMIT_COMPLETE_OK:
+-            rs = RESOLVER_SEND_STATUS_OK;
++            if (current_rule_type == RESOLVER_SET_RULE && attribute_store_is_value_matched(current_node)) {
++                rs = RESOLVER_SEND_STATUS_OK_EXECUTION_VERIFIED;
++            } else {
++                rs = RESOLVER_SEND_STATUS_OK;
++            }
+             break;
+         case TRANSMIT_COMPLETE_VERIFIED:
+             rs = RESOLVER_SEND_STATUS_OK_EXECUTION_VERIFIED;
+@@ -195,8 +199,13 @@
+             rs    = RESOLVER_SEND_STATUS_OK_EXECUTION_VERIFIED;
+             break;
+         case SUPERVISION_REPORT_NO_SUPPORT:
+-            event = FRAME_SENT_EVENT_OK_SUPERVISION_NO_SUPPORT;
+-            rs    = RESOLVER_SEND_STATUS_OK_EXECUTION_FAILED;
++            if (current_rule_type == RESOLVER_SET_RULE && attribute_store_is_value_matched(current_node)) {
++                event = FRAME_SENT_EVENT_OK_SUPERVISION_SUCCESS;
++                rs    = RESOLVER_SEND_STATUS_OK_EXECUTION_VERIFIED;
++            } else {
++                event = FRAME_SENT_EVENT_OK_SUPERVISION_NO_SUPPORT;
++                rs    = RESOLVER_SEND_STATUS_OK_EXECUTION_FAILED;
++            }
+             break;
+         case SUPERVISION_REPORT_FAIL:
+             event = FRAME_SENT_EVENT_OK_SUPERVISION_FAIL;
+--- a/components/attribute_resolver/src/zpc_attribute_resolver_send.c
++++ b/components/attribute_resolver/src/zpc_attribute_resolver_send.c
+@@ -108,7 +108,9 @@
+ 
+     // Prepare the Z-Wave TX options.
+     zwave_tx_options_t tx_options = {0};
+-    zwave_tx_scheme_get_node_tx_options(ZWAVE_TX_QOS_RECOMMENDED_NODE_INTERVIEW_PRIORITY, is_set ? 0 : 1, 0, &tx_options);
++    const bool use_supervision    = is_set == true && !attribute_resolver_is_no_supervision_type(attribute_store_get_node_type(node)) && zwave_command_class_supervision_want_supervision_frame(node_id, endpoint_id);
++    const uint8_t expected_responses = (is_set == true && !use_supervision) ? 1 : (is_set ? 0 : 1);
++    zwave_tx_scheme_get_node_tx_options(ZWAVE_TX_QOS_RECOMMENDED_NODE_INTERVIEW_PRIORITY, expected_responses, 0, &tx_options);
+ 
+     intptr_t user                       = node;
+     sl_status_t send_status             = SL_STATUS_OK;
