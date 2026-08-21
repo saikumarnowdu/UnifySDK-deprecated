@@ -1268,6 +1268,51 @@ void test_attribute_resolver_multi_frame_no_supervision()
   contiki_test_helper_run(1);
 }
 
+void test_attribute_resolver_no_supervision_set_reply_updates_reported()
+{
+  // Register a rule for type 10
+  attribute_resolver_register_rule(attribute_store_get_node_type(node_10),
+                                   &test_set_resolution_function,
+                                   &test_get_resolution_function);
+
+  // Regular set resolution.
+  value          = 34;
+  expected_value = value;
+  attribute_store_set_desired(node_10, &value, sizeof(value));
+
+  // Expect a Set resolution
+  send_function_return_code    = SL_STATUS_OK;
+  set_function_return_code     = SL_STATUS_OK;
+  expected_node_for_resolution = node_10;
+  contiki_test_helper_run(0);
+
+  TEST_ASSERT_EQUAL(1, test_send_function_call_count);
+  TEST_ASSERT_EQUAL(1, test_set_function_call_count);
+  TEST_ASSERT_EQUAL(0, test_get_function_call_count);
+
+  // Simulate the device SET reply updating reported before TX completion.
+  attribute_store_set_reported(node_10, &value, sizeof(value));
+
+  on_resolver_send_data_complete(RESOLVER_SEND_STATUS_OK,
+                                 0,
+                                 node_10,
+                                 RESOLVER_SET_RULE);
+
+  attribute_store_get_reported(node_10, &value, sizeof(value));
+  TEST_ASSERT_EQUAL(expected_value, value);
+  TEST_ASSERT_FALSE(
+    attribute_store_is_value_defined(node_10, DESIRED_ATTRIBUTE));
+
+  // No GET should be issued when the SET reply already aligned reported.
+  contiki_test_helper_run(1);
+
+  TEST_ASSERT_EQUAL(1, test_send_function_call_count);
+  TEST_ASSERT_EQUAL(1, test_set_function_call_count);
+  TEST_ASSERT_EQUAL(0, test_get_function_call_count);
+
+  contiki_test_helper_run(1);
+}
+
 void test_attribute_resolver_send_data_cannot_send()
 {
   // Register a rule for type 10
