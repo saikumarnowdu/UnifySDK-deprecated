@@ -4,3 +4,11 @@ The Z-wave protocol controller(ZPC) that implements Z-Wave functionality is move
 
 [Silicon Labs Z-Wave Protocol Controller Github](https://github.com/SiliconLabsSoftware/z-wave-protocol-controller).
 [Silicon Labs Z-Wave Protocol Controller Documentation]](https://siliconlabssoftware.github.io/z-wave-protocol-controller).
+
+## Serial API performance notes
+
+For reviews of **zwave** / **zwapi** Serial API bandwidth utilization (and a
+patch applicable to `ver_1.6.0` ZPC sources), see:
+
+- [reviews/](../../../reviews/README.md) — zwapi + zwave performance reviews
+- `tools/zpc_serial_api_perf/` — applyable patch kit
