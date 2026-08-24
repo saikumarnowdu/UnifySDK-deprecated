@@ -1,0 +1,31 @@
+/**
+ * @mainpage ZPC Technical Reference
+ *
+ * @brief Z-Wave Protocol Controller (ZPC) architecture and implementation reference.
+ *
+ * This documentation captures the ZPC application as it existed in the Unify SDK
+ * at tag @c ver_1.6.0 — the last release that included the full
+ * @c applications/zpc source tree. From @c ver_1.7.0 onward, ZPC development
+ * moved to a standalone repository.
+ *
+ * @section zpc_ref_external External Repository
+ *
+ * - GitHub: https://github.com/SiliconLabsSoftware/z-wave-protocol-controller
+ * - Documentation: https://siliconlabssoftware.github.io/z-wave-protocol-controller
+ *
+ * @section zpc_ref_pages Pages
+ *
+ * @subpage zpc_overview "Overview"
+ * @subpage zpc_repository_status "Repository Status"
+ * @subpage zpc_architecture "Architecture"
+ * @subpage zpc_directory_structure "Directory Structure"
+ * @subpage zpc_components "Core Components"
+ * @subpage zpc_command_classes "Command Classes"
+ * @subpage zpc_dotdot_mapping "DotDot Mapping"
+ * @subpage zpc_configuration "Configuration"
+ * @subpage zpc_build_deploy "Build and Deployment"
+ * @subpage zpc_tools "Tools and Utilities"
+ *
+ * @defgroup zpc_reference ZPC Reference Documentation
+ * @brief Standalone reference pages for the Z-Wave Protocol Controller.
+ */
