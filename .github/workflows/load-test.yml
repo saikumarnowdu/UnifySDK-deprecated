@@ -1,0 +1,81 @@
+---
+name: Load tests
+
+on:
+  push:
+    paths:
+      - 'components/uic_attribute_resolver/**'
+      - 'tools/mqtt_load_test.py'
+      - '.github/workflows/load-test.yml'
+  pull_request:
+    paths:
+      - 'components/uic_attribute_resolver/**'
+      - 'tools/mqtt_load_test.py'
+      - '.github/workflows/load-test.yml'
+  workflow_dispatch:
+
+jobs:
+  zwave-load-benchmark:
+    name: Z-Wave load benchmark (unit)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build ruby \
+            libboost-system-dev libboost-filesystem-dev \
+            libboost-program-options-dev libboost-thread-dev \
+            libboost-log-dev libedit-dev libreadline-dev \
+            libsqlite3-dev libssl-dev libyaml-cpp-dev \
+            nlohmann-json3-dev python3-pip mosquitto
+
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.71.0
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Configure and build load benchmark test
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTING=ON \
+            -DBUILD_DEV_GUI=OFF \
+            -DBUILD_EED=OFF \
+            -DBUILD_EPC=OFF \
+            -DBUILD_UPVL=OFF \
+            -DBUILD_GMS=OFF \
+            -DBUILD_NAL=OFF \
+            -DBUILD_UPTI_CAP=OFF \
+            -DBUILD_UPTI_WRITER=OFF \
+            -DBUILD_IMAGE_PROVIDER=OFF \
+            -DBUILD_MATTER_BRIDGE=OFF
+          cmake --build build --target zwave_load_benchmark_test
+
+      - name: Run Z-Wave load benchmark
+        run: |
+          ctest --test-dir build --output-on-failure -R zwave_load_benchmark_test
+
+  mqtt-load-smoke:
+    name: MQTT load test (smoke)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-paho-mqtt mosquitto
+
+      - name: Start MQTT broker
+        run: |
+          mosquitto -d
+          sleep 1
+
+      - name: Run MQTT load test smoke check
+        run: python3 tools/mqtt_load_test.py --mode smoke --host localhost
+
+      - name: Validate MQTT load test CLI
+        run: python3 tools/mqtt_load_test.py --help
