@@ -2,7 +2,7 @@
 
 This document traces how an outbound device command travels through ZPC (Z-Wave Protocol Controller) from an MQTT message on the broker to bytes on the NCP serial port.
 
-**Scope:** outbound path only (MQTT command → Z-Wave TX). The reverse path (serial RX → MQTT publish) is a separate flow.
+**Scope:** outbound path only (MQTT command → Z-Wave TX). The reverse path (serial RX → MQTT publish) is documented in [Serial to MQTT Code Flow](serial_to_mqtt_flow.md).
 
 **Transport note:** ZPC on `release/1.6.x` talks to the Z-Wave NCP over the legacy **Serial API** (`zwapi_serial` → `write(serial_fd)`). CPC (`externals/cpcd/`) is vendored but not used on this TX path.
 
@@ -448,6 +448,7 @@ applications/zpc/components/
 ## Related documentation
 
 - [ZPC introduction](../../../doc/protocol/zwave/zpc_introduction.md)
+- [Serial to MQTT Code Flow](serial_to_mqtt_flow.md) — inbound path (serial RX → MQTT publish)
 - [How to write UAM files for ZPC](../how_to_write_uam_files_for_the_zpc.md)
 - [How to interact with clusters](../how_to_interact_with_clusters.rst)
 - [Supported Command Classes](supported_command_classes.md)
