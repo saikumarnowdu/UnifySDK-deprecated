@@ -30,4 +30,8 @@ The guide [How to interact with clusters](../../../applications/zpc/how_to_inter
 
 The guide [Supported Command Classes](../../../applications/zpc/doc/supported_command_classes.md) goes into detail about how the command class are implemented. This documents gives specifics about the attributes store and MQTT topics that can interact with the class.
 
+The guide [MQTT to Serial Code Flow](../../../applications/zpc/doc/mqtt_to_serial_flow.md) traces the outbound path from an MQTT command through attribute resolution to bytes on the NCP serial port, including state machine diagrams and a step-by-step trace for `OnOff/Commands/On`.
+
+The guide [Serial to MQTT Code Flow](../../../applications/zpc/doc/serial_to_mqtt_flow.md) traces the inbound path from NCP serial RX through transport decapsulation and attribute mapping to an MQTT `OnOff/Attributes/OnOff/Reported` publish, including state machine diagrams and a step-by-step trace for `SWITCH_BINARY_REPORT`.
+
 The doxygen generated <a href="../../../doxygen_zpc/index.html">ZPC API</a> 
