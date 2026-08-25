@@ -151,6 +151,25 @@ static void set_reported_duration(attribute_store_node_t state_node,
   attribute_store_set_reported(duration_node, &duration, sizeof(duration));
 }
 
+static void verify_no_supervision_set(attribute_store_node_t state_node)
+{
+  attribute_store_node_t value_node
+    = attribute_store_get_first_child_by_type(state_node, ATTRIBUTE(VALUE));
+
+  binary_switch_state_t state = {};
+  get_state(state_node, &state);
+
+  if (attribute_store_is_value_matched(value_node)) {
+    set_reported_value(state_node, state.desired_value);
+    set_reported_duration(state_node, state.desired_duration);
+    set_command_status_value(state_node, FINAL_STATE, FINAL_STATE);
+    return;
+  }
+
+  // No confirmation after the response window — probe with GET.
+  attribute_store_undefine_reported(state_node);
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // Resolution functions
 ///////////////////////////////////////////////////////////////////////////////
@@ -325,28 +344,55 @@ static void on_state_send_data_complete(attribute_store_node_t state_node,
       set_command_status_value(state_node, FINAL_STATE, FINAL_STATE);
       break;
 
-    case FRAME_SENT_EVENT_OK_NO_SUPERVISION:
-      // We assumed it worked in case of no-supervision.
-      // We only probe after the expected duration.
-      set_reported_duration(state_node, state.desired_duration);
-      // Probe again after the duration (can also be 0)
-      attribute_timeout_set_callback(
-        state_node,
-        PROBE_BACK_OFF
-          + zwave_duration_to_time((uint8_t)state.desired_duration),
-        &attribute_store_undefine_reported);
+    case FRAME_SENT_EVENT_OK_NO_SUPERVISION: {
+      attribute_store_node_t value_node
+        = attribute_store_get_first_child_by_type(state_node, ATTRIBUTE(VALUE));
 
+      // Re-read state: a no-supervision SET reply may have updated reported via RX.
+      get_state(state_node, &state);
+
+      if (attribute_store_is_value_matched(value_node)) {
+        set_reported_value(state_node, state.desired_value);
+        set_reported_duration(state_node, state.desired_duration);
+        set_command_status_value(state_node, FINAL_STATE, FINAL_STATE);
+        break;
+      }
+
+      // Wait for the Z-Wave recommended response time (plus any transition
+      // duration) before deciding whether to probe with GET.
+      set_reported_duration(state_node, state.desired_duration);
+      clock_time_t verify_delay = ZWAVE_RECOMMENDED_RESPONSE_TIME_MS;
+      if (state.desired_duration > 0) {
+        verify_delay += zwave_duration_to_time((uint8_t)state.desired_duration);
+      }
+      attribute_timeout_set_callback(state_node,
+                                     verify_delay,
+                                     &verify_no_supervision_set);
       break;
+    }
 
     case FRAME_SENT_EVENT_OK_SUPERVISION_NO_SUPPORT:
     case FRAME_SENT_EVENT_OK_SUPERVISION_FAIL:
-    default:
+    default: {
+      attribute_store_node_t value_node
+        = attribute_store_get_first_child_by_type(state_node, ATTRIBUTE(VALUE));
+
+      get_state(state_node, &state);
+
+      if (attribute_store_is_value_matched(value_node)) {
+        set_reported_value(state_node, state.desired_value);
+        set_reported_duration(state_node, state.desired_duration);
+        set_command_status_value(state_node, FINAL_STATE, FINAL_STATE);
+        break;
+      }
+
       // Roll back desired to the reported.
       set_desired_value(state_node, state.reported_value);
       set_desired_duration(state_node, state.reported_duration);
       // Probe again, see what the node is up to.
       attribute_store_undefine_reported(state_node);
       break;
+    }
   }
 }
 

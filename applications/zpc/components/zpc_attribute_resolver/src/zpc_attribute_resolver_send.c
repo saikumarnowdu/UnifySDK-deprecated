@@ -72,9 +72,13 @@ sl_status_t attribute_resolver_send(attribute_store_node_t node,
 
   // Prepare the Z-Wave TX options.
   zwave_tx_options_t tx_options = {0};
+  const bool use_supervision
+    = is_set == true && zwave_node_want_supervision_frame(node_id, endpoint_id);
+  const uint8_t expected_responses
+    = (is_set == true && !use_supervision) ? 1 : (is_set ? 0 : 1);
   zwave_tx_scheme_get_node_tx_options(
     ZWAVE_TX_QOS_RECOMMENDED_NODE_INTERVIEW_PRIORITY,
-    is_set ? 0 : 1,
+    expected_responses,
     0,
     &tx_options);
 
@@ -82,9 +86,7 @@ sl_status_t attribute_resolver_send(attribute_store_node_t node,
   sl_status_t send_status             = SL_STATUS_OK;
   zwave_tx_session_id_t tx_session_id = NULL;
   if (is_set == true
-      && true
-           == zwave_node_want_supervision_frame(node_id,
-                                                endpoint_id)) {
+      && true == use_supervision) {
     // Send with Supervision
     send_status = zwave_command_class_supervision_send_data(
       &connection_info,

@@ -64,6 +64,10 @@ typedef struct zwave_minimum_frame {
 /// after a node has finished a transition.
 #define PROBE_BACK_OFF 500
 
+/// Z-Wave recommended time for a node to respond to a command (ms).
+/// Used before probing state when supervision is not available.
+#define ZWAVE_RECOMMENDED_RESPONSE_TIME_MS 1600
+
 #ifdef __cplusplus
 extern "C" {
 #endif

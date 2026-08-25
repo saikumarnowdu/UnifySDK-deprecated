@@ -405,6 +405,72 @@ void test_zwave_command_class_switch_binary_set_state()
                    FRAME_SENT_EVENT_OK_NO_SUPERVISION);
 }
 
+void test_zwave_command_class_switch_binary_no_supervision_skips_probe_when_matched()
+{
+  is_node_pending_set_resolution_IgnoreAndReturn(false);
+
+  attribute_store_node_t state_node
+    = attribute_store_get_node_child_by_type(endpoint_id_node,
+                                             ATTRIBUTE(STATE),
+                                             0);
+  attribute_store_node_t value_node
+    = attribute_store_get_node_child_by_type(state_node, ATTRIBUTE(VALUE), 0);
+
+  const uint32_t desired_value = 0xFF;
+  attribute_store_set_desired(value_node,
+                              &desired_value,
+                              sizeof(desired_value));
+  attribute_store_set_reported(value_node,
+                               &desired_value,
+                               sizeof(desired_value));
+  TEST_ASSERT_TRUE(attribute_store_is_value_matched(value_node));
+
+  TEST_ASSERT_NOT_NULL(on_send_complete);
+  on_send_complete(state_node,
+                   RESOLVER_SET_RULE,
+                   FRAME_SENT_EVENT_OK_NO_SUPERVISION);
+
+  TEST_ASSERT_TRUE(
+    attribute_store_is_value_defined(value_node, REPORTED_ATTRIBUTE));
+
+  attribute_store_get_reported(state_node, &u32_value, sizeof(u32_value));
+  TEST_ASSERT_EQUAL(FINAL_STATE, u32_value);
+  attribute_store_get_desired(state_node, &u32_value, sizeof(u32_value));
+  TEST_ASSERT_EQUAL(FINAL_STATE, u32_value);
+}
+
+void test_zwave_command_class_switch_binary_no_supervision_defers_probe_until_response_time()
+{
+  is_node_pending_set_resolution_IgnoreAndReturn(false);
+
+  attribute_store_node_t state_node
+    = attribute_store_get_node_child_by_type(endpoint_id_node,
+                                             ATTRIBUTE(STATE),
+                                             0);
+  attribute_store_node_t value_node
+    = attribute_store_get_node_child_by_type(state_node, ATTRIBUTE(VALUE), 0);
+
+  const uint32_t desired_value = 0xFF;
+  const uint32_t reported_value = 0x00;
+  attribute_store_set_desired(value_node,
+                              &desired_value,
+                              sizeof(desired_value));
+  attribute_store_set_reported(value_node,
+                               &reported_value,
+                               sizeof(reported_value));
+  TEST_ASSERT_FALSE(attribute_store_is_value_matched(value_node));
+
+  TEST_ASSERT_NOT_NULL(on_send_complete);
+  on_send_complete(state_node,
+                   RESOLVER_SET_RULE,
+                   FRAME_SENT_EVENT_OK_NO_SUPERVISION);
+
+  // Probe is deferred; reported is not cleared immediately.
+  TEST_ASSERT_TRUE(
+    attribute_store_is_value_defined(value_node, REPORTED_ATTRIBUTE));
+  TEST_ASSERT_EQUAL(reported_value, attribute_store_get_reported_number(value_node));
+}
+
 void test_zwave_command_class_switch_binary_generated_on_off_commands_on()
 {
   // Simulate an incoming Binary Switch Set, with non-zero value
