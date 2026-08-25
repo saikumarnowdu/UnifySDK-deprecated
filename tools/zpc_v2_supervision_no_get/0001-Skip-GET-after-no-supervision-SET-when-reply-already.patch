@@ -1,0 +1,106 @@
+From 29240a136a3c80dfb52676a3140ce451c6dffa64 Mon Sep 17 00:00:00 2001
+From: Cursor Agent <cursoragent@cursor.com>
+Date: Tue, 25 Aug 2026 18:55:08 +0000
+Subject: [PATCH] Skip GET after no-supervision SET when reply already matched
+ reported
+
+When a device without Supervision returns the new value in the SET reply,
+treat matched reported values as verified instead of undefining reported
+and forcing a follow-up GET. Wait for one application response on
+no-supervision SET (number_of_responses=1) so the RX path can update
+reported before the send-complete callback runs.
+---
+ .../src/attribute_resolver_rule.cpp           | 32 +++++++++++++++----
+ .../src/zpc_attribute_resolver_callbacks.cpp  |  6 +++-
+ .../src/zpc_attribute_resolver_send.c         |  8 +++--
+ 3 files changed, 36 insertions(+), 10 deletions(-)
+
+diff --git a/components/attribute_resolver/src/attribute_resolver_rule.cpp b/components/attribute_resolver/src/attribute_resolver_rule.cpp
+index 20b5a2f..98afb02 100644
+--- a/components/attribute_resolver/src/attribute_resolver_rule.cpp
++++ b/components/attribute_resolver/src/attribute_resolver_rule.cpp
+@@ -230,16 +230,34 @@ void on_resolver_send_data_complete(resolver_send_status_t status, clock_time_t
+     switch (status) {
+         case RESOLVER_SEND_STATUS_OK:
+             if (rule_type == RESOLVER_SET_RULE) {
+-                // We need to update the reported value, undefine it to trigger
+-                // a get rule.
+-                attribute_store_undefine_reported(node);
+                 if (!needs_more_frames) {
++                    bool all_matched = true;
+                     for (attribute_store::attribute a: attribute_resolver_rule_get_group_nodes(rule_type, node)) {
+-                        // Now we can align the reported to the desired value
+-                        a.clear_reported();
+-                        a.clear_desired();
+-                        attribute_store_log_node(node, false);
++                        if (!attribute_store_is_value_matched(a)) {
++                            all_matched = false;
++                            break;
++                        }
++                    }
++                    if (all_matched) {
++                        // A no-supervision SET reply may already have updated reported via
++                        // the RX path. Avoid undefining reported and issuing a GET.
++                        for (attribute_store::attribute a: attribute_resolver_rule_get_group_nodes(rule_type, node)) {
++                            a.set_reported(a.desired_or_reported<std::vector<uint8_t>>());
++                            a.clear_desired();
++                            attribute_store_log_node(a, false);
++                        }
++                    } else {
++                        // We need to update the reported value, undefine it to trigger
++                        // a get rule.
++                        attribute_store_undefine_reported(node);
++                        for (attribute_store::attribute a: attribute_resolver_rule_get_group_nodes(rule_type, node)) {
++                            a.clear_reported();
++                            a.clear_desired();
++                            attribute_store_log_node(node, false);
++                        }
+                     }
++                } else {
++                    attribute_store_undefine_reported(node);
+                 }
+             }
+             break;
+diff --git a/components/attribute_resolver/src/zpc_attribute_resolver_callbacks.cpp b/components/attribute_resolver/src/zpc_attribute_resolver_callbacks.cpp
+index efdb544..7f73dee 100644
+--- a/components/attribute_resolver/src/zpc_attribute_resolver_callbacks.cpp
++++ b/components/attribute_resolver/src/zpc_attribute_resolver_callbacks.cpp
+@@ -119,7 +119,11 @@ void on_resolver_zwave_send_data_complete(uint8_t status, const zwapi_tx_report_
+     resolver_send_status_t rs;
+     switch (status) {
+         case TRANSMIT_COMPLETE_OK:
+-            rs = RESOLVER_SEND_STATUS_OK;
++            if (current_rule_type == RESOLVER_SET_RULE && attribute_store_is_value_matched(current_node)) {
++                rs = RESOLVER_SEND_STATUS_OK_EXECUTION_VERIFIED;
++            } else {
++                rs = RESOLVER_SEND_STATUS_OK;
++            }
+             break;
+         case TRANSMIT_COMPLETE_VERIFIED:
+             rs = RESOLVER_SEND_STATUS_OK_EXECUTION_VERIFIED;
+diff --git a/components/attribute_resolver/src/zpc_attribute_resolver_send.c b/components/attribute_resolver/src/zpc_attribute_resolver_send.c
+index f7172f8..e1541af 100644
+--- a/components/attribute_resolver/src/zpc_attribute_resolver_send.c
++++ b/components/attribute_resolver/src/zpc_attribute_resolver_send.c
+@@ -108,12 +108,16 @@ sl_status_t attribute_resolver_send(attribute_store_node_t node, const uint8_t *
+ 
+     // Prepare the Z-Wave TX options.
+     zwave_tx_options_t tx_options = {0};
+-    zwave_tx_scheme_get_node_tx_options(ZWAVE_TX_QOS_RECOMMENDED_NODE_INTERVIEW_PRIORITY, is_set ? 0 : 1, 0, &tx_options);
++    const bool use_supervision
++        = is_set == true && !attribute_resolver_is_no_supervision_type(attribute_store_get_node_type(node))
++          && zwave_command_class_supervision_want_supervision_frame(node_id, endpoint_id);
++    const uint8_t expected_responses = (is_set == true && !use_supervision) ? 1 : (is_set ? 0 : 1);
++    zwave_tx_scheme_get_node_tx_options(ZWAVE_TX_QOS_RECOMMENDED_NODE_INTERVIEW_PRIORITY, expected_responses, 0, &tx_options);
+ 
+     intptr_t user                       = node;
+     sl_status_t send_status             = SL_STATUS_OK;
+     zwave_tx_session_id_t tx_session_id = NULL;
+-    if (is_set == true && !attribute_resolver_is_no_supervision_type(attribute_store_get_node_type(node)) && zwave_command_class_supervision_want_supervision_frame(node_id, endpoint_id)) {
++    if (is_set == true && use_supervision) {
+         // Send with Supervision
+         send_status = zwave_command_class_supervision_send_data(&connection_info, frame_data_len, frame_data, &tx_options, on_resolver_zwave_supervision_complete, (void *)user, &tx_session_id);
+         if (send_status != SL_STATUS_OK) {
+-- 
+2.43.0
+
