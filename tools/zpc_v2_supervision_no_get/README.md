@@ -2,6 +2,8 @@
 
 Applies to [Silicon Labs Z-Wave Protocol Controller](https://github.com/SiliconLabsSoftware/z-wave-protocol-controller) tag `zpc-v2.0.0`.
 
+See also: [ZPC repository map](../README.md) for how this repo relates to UnifySDK, legacy ZPC, and v2.0.
+
 ZPC v2.0.0 is a **new codebase** (not API-compatible with legacy Unify ZPC 1.6.x). Its v2.0.0 release notes list **no bug fixes** for this area; the generic attribute resolver still undefines `reported` on `RESOLVER_SEND_STATUS_OK`, which forces a redundant GET when the SET reply already updated state.
 
 ## Apply
