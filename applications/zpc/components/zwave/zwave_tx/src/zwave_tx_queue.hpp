@@ -80,11 +80,49 @@ typedef struct zwave_tx_queue_element {
   uint8_t send_data_status;
 } zwave_tx_queue_element_t;
 
+/**
+ * @brief Destination key used to keep same-node frames adjacent in the queue.
+ */
+struct zwave_tx_queue_destination_key {
+  zwave_node_id_t node_id;
+  zwave_endpoint_id_t endpoint_id;
+  bool is_multicast;
+};
+
+inline zwave_tx_queue_destination_key
+  zwave_tx_queue_get_destination_key(const zwave_tx_queue_element_t &element)
+{
+  return {
+    .node_id      = element.connection_info.remote.node_id,
+    .endpoint_id  = element.connection_info.remote.endpoint_id,
+    .is_multicast = element.connection_info.remote.is_multicast,
+  };
+}
+
 struct queue_element_qos_compare {
   bool operator()(const zwave_tx_queue_element_t &lhs,
                   const zwave_tx_queue_element_t &rhs) const
   {
-    return lhs.options.qos_priority > rhs.options.qos_priority;
+    if (lhs.options.qos_priority != rhs.options.qos_priority) {
+      return lhs.options.qos_priority > rhs.options.qos_priority;
+    }
+
+    const zwave_tx_queue_destination_key lhs_destination
+      = zwave_tx_queue_get_destination_key(lhs);
+    const zwave_tx_queue_destination_key rhs_destination
+      = zwave_tx_queue_get_destination_key(rhs);
+
+    if (lhs_destination.is_multicast != rhs_destination.is_multicast) {
+      return lhs_destination.is_multicast < rhs_destination.is_multicast;
+    }
+    if (lhs_destination.node_id != rhs_destination.node_id) {
+      return lhs_destination.node_id < rhs_destination.node_id;
+    }
+    if (lhs_destination.endpoint_id != rhs_destination.endpoint_id) {
+      return lhs_destination.endpoint_id < rhs_destination.endpoint_id;
+    }
+
+    return lhs.queue_timestamp < rhs.queue_timestamp;
   }
 };
 
@@ -145,6 +183,52 @@ class zwave_tx_queue
  * - nullptr if the queue is empty
  */
   zwave_tx_queue_element_t *first_in_queue();
+
+  /**
+   * @brief Gets the highest priority element that may be transmitted now.
+   *
+   * Skips elements that are awaiting a response for their own session, or
+   * singlecast frames to NodeIDs that are currently waiting for a response.
+   *
+   * @param element                 Output element copy.
+   * @param is_session_awaiting_response Predicate returning true when a
+   *                                    session must not be re-selected.
+   * @param is_node_blocked           Predicate returning true when a NodeID
+   *                                    must not receive new frames yet.
+   *
+   * @returns SL_STATUS_OK when a sendable element was found.
+   */
+  template<typename SessionPredicate, typename NodePredicate>
+  sl_status_t get_highest_priority_sendable_element(
+    zwave_tx_queue_element_t *element,
+    SessionPredicate is_session_awaiting_response,
+    NodePredicate is_node_blocked) const
+  {
+    const_queue_iterator best_match = queue.end();
+    queue_element_qos_compare compare;
+
+    for (auto it = queue.begin(); it != queue.end(); ++it) {
+      if (is_session_awaiting_response(it->zwave_tx_session_id)) {
+        continue;
+      }
+
+      if ((it->connection_info.remote.is_multicast == false)
+          && is_node_blocked(it->connection_info.remote.node_id)) {
+        continue;
+      }
+
+      if (best_match == queue.end() || compare(*it, *best_match)) {
+        best_match = it;
+      }
+    }
+
+    if (best_match == queue.end()) {
+      return SL_STATUS_NOT_FOUND;
+    }
+
+    memcpy(element, &(*best_match), sizeof(zwave_tx_queue_element_t));
+    return SL_STATUS_OK;
+  }
 
   /**
  * @brief clears the tx queue

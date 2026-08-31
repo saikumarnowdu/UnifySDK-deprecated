@@ -1892,24 +1892,8 @@ void test_zwave_tx_receive_only_one_response_during_backoff()
                                         NULL,
                                         test_tx_session_id_2);
 
-  // We should be in back-off.
-  contiki_test_helper_run(10);
-
-  // Receive a frame from another NodeID in the meantime:
-  zwave_controller_callbacks->on_rx_frame_received(
-    test_connection_2.remote.node_id + 1);
-
-  // We should still be in back-off.
-  contiki_test_helper_run(10);
-
-  // Receive a frame from our NodeID
-  zwave_controller_callbacks->on_rx_frame_received(
-    test_connection_2.remote.node_id);
-
-  // We should still be in back-off, we need 3 responses
-  contiki_test_helper_run(20);
-
-  // Tx Queue should try to send frame 3 now, back-off is over due to answer
+  // Per-destination response wait: other nodes may transmit while node 4
+  // is still waiting for its response.
   zwave_controller_transport_send_data_ExpectWithArrayAndReturn(
     &test_connection_3,
     sizeof(test_connection_3),
@@ -1923,24 +1907,27 @@ void test_zwave_tx_receive_only_one_response_during_backoff()
     sizeof(void *),
     NULL,
     SL_STATUS_OK);
-  // Connection is modified by the Tx Queue, ignore this here
   zwave_controller_transport_send_data_IgnoreArg_connection();
   zwave_controller_transport_send_data_IgnoreArg_session();
   zwave_controller_transport_send_data_IgnoreArg_on_send_complete();
   zwave_controller_transport_send_data_IgnoreArg_user();
 
-  // Just run through the back-off here.
-  contiki_test_helper_run(TX_BACKOFF_CONTIKI_CLOCK_JUMP);
+  contiki_test_helper_run(10);
 
-  // There should be no effect if we receive a frame from a node while
-  // transmitting, when we don't expect any answer
+  // Receive a frame from another NodeID in the meantime:
   zwave_controller_callbacks->on_rx_frame_received(
-    test_connection_3.remote.node_id);
+    test_connection_2.remote.node_id + 1);
 
-  // Get the clock incremented between transmit and callback
-  contiki_test_helper_run(DEFAULT_CONTIKI_CLOCK_JUMP);
+  contiki_test_helper_run(10);
 
-  // call the callback from the transport:
+  // Receive a frame from our NodeID
+  zwave_controller_callbacks->on_rx_frame_received(
+    test_connection_2.remote.node_id);
+
+  // We still need more responses from node 4 before its session is finalized.
+  contiki_test_helper_run(20);
+
+  // call the callback from the transport for element 3:
   on_zwave_transport_send_data_complete(TRANSMIT_COMPLETE_OK,
                                         NULL,
                                         test_tx_session_id_3);
@@ -1948,6 +1935,83 @@ void test_zwave_tx_receive_only_one_response_during_backoff()
   contiki_test_helper_run(0);
 
   // Test we received the correct data in the callback
+  TEST_ASSERT_EQUAL(2, send_done_count);
+  TEST_ASSERT_EQUAL(TRANSMIT_COMPLETE_OK, send_done_status);
+}
+
+void test_zwave_tx_sends_to_other_node_while_awaiting_response()
+{
+  TEST_ASSERT_EQUAL(SL_STATUS_OK,
+                    zwave_tx_send_data(&test_connection_2,
+                                       sizeof(test_expected_frame_data_2),
+                                       test_expected_frame_data_2,
+                                       &test_tx_options_2,
+                                       send_data_callback,
+                                       NULL,
+                                       &test_tx_session_id_2));
+
+  TEST_ASSERT_EQUAL(SL_STATUS_OK,
+                    zwave_tx_send_data(&test_connection_3,
+                                       sizeof(test_expected_frame_data_3),
+                                       test_expected_frame_data_3,
+                                       &test_tx_options_3,
+                                       send_data_callback,
+                                       &test_tx_session_id_3,
+                                       &test_tx_session_id_3));
+
+  zwave_controller_transport_send_data_ExpectWithArrayAndReturn(
+    &test_connection_2,
+    sizeof(test_connection_2),
+    sizeof(test_expected_frame_data_2),
+    test_expected_frame_data_2,
+    sizeof(test_expected_frame_data_2),
+    &test_tx_options_2,
+    sizeof(test_tx_options_2),
+    NULL,
+    NULL,
+    sizeof(void *),
+    NULL,
+    SL_STATUS_OK);
+  zwave_controller_transport_send_data_IgnoreArg_connection();
+  zwave_controller_transport_send_data_IgnoreArg_session();
+  zwave_controller_transport_send_data_IgnoreArg_on_send_complete();
+  zwave_controller_transport_send_data_IgnoreArg_user();
+
+  contiki_test_helper_run(DEFAULT_CONTIKI_CLOCK_JUMP);
+
+  on_zwave_transport_send_data_complete(TRANSMIT_COMPLETE_OK,
+                                        NULL,
+                                        test_tx_session_id_2);
+
+  zwave_controller_transport_send_data_ExpectWithArrayAndReturn(
+    &test_connection_3,
+    sizeof(test_connection_3),
+    sizeof(test_expected_frame_data_3),
+    test_expected_frame_data_3,
+    sizeof(test_expected_frame_data_3),
+    &test_tx_options_3,
+    sizeof(test_tx_options_3),
+    NULL,
+    NULL,
+    sizeof(void *),
+    NULL,
+    SL_STATUS_OK);
+  zwave_controller_transport_send_data_IgnoreArg_connection();
+  zwave_controller_transport_send_data_IgnoreArg_session();
+  zwave_controller_transport_send_data_IgnoreArg_on_send_complete();
+  zwave_controller_transport_send_data_IgnoreArg_user();
+
+  contiki_test_helper_run(10);
+
+  on_zwave_transport_send_data_complete(TRANSMIT_COMPLETE_OK,
+                                        NULL,
+                                        test_tx_session_id_3);
+
+  zwave_controller_callbacks->on_rx_frame_received(
+    test_connection_2.remote.node_id);
+
+  contiki_test_helper_run(0);
+
   TEST_ASSERT_EQUAL(2, send_done_count);
   TEST_ASSERT_EQUAL(TRANSMIT_COMPLETE_OK, send_done_status);
 }

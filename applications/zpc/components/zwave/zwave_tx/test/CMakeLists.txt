@@ -25,3 +25,13 @@ target_add_unittest(zwave_tx
 target_add_unittest(zwave_tx
 NAME zwave_tx_route_cache_test
 SOURCES zwave_tx_route_cache_test.c)
+
+# Pending responses test
+target_add_unittest(zwave_tx
+  NAME zwave_tx_pending_responses_test
+  SOURCES zwave_tx_pending_responses_test.cpp)
+
+# Queue ordering compare test
+target_add_unittest(zwave_tx
+  NAME zwave_tx_queue_ordering_test
+  SOURCES zwave_tx_queue_ordering_test.cpp)

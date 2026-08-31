@@ -19,6 +19,7 @@
 #include "zwave_tx_queue.hpp"
 #include "zwave_tx_state_logging.h"
 #include "zwave_tx_incoming_frames.hpp"
+#include "zwave_tx_pending_responses.hpp"
 
 // Interfaces
 #include "zwave_helper_macros.h"
@@ -41,12 +42,16 @@ namespace
 zwave_tx_state_t state;
 // back-off timer, used to decide when to send the next frame
 struct etimer backoff_timer;
+// Timer for per-destination response deadlines
+struct etimer pending_response_timer;
 // Private variable indicating if a Tx Queue flush is ongoing
 bool queue_flush_ongoing = false;
 // The frame currently being handled
 zwave_tx_session_id_t current_tx_session_id;
 // Map of NodeIDs and the number of frames that we expect from Nodes in our network.
 zwave_tx_incoming_frames expected_incoming_frames;
+// Frames awaiting application responses, keyed per destination NodeID.
+zwave_tx_pending_responses pending_responses;
 // Reason for back-off (current_tx_session_id or we were told of extra frames)
 zwave_tx_backoff_reason_t backoff_reason;
 }  // namespace
@@ -57,6 +62,17 @@ zwave_tx_queue tx_queue;  // zwave_tx.cpp uses the tx_queue.
 // Forward declarations
 static void zwave_tx_message_transmission_completed_step(
   zwave_tx_session_id_t session_id);
+
+static void zwave_tx_process_schedule_pending_response_timer();
+static void zwave_tx_process_expire_pending_responses();
+static void
+  zwave_tx_process_finalize_pending_response(zwave_tx_session_id_t session_id);
+static bool zwave_tx_process_is_session_awaiting_response(
+  zwave_tx_session_id_t session_id);
+static bool
+  zwave_tx_process_is_node_blocked(zwave_node_id_t node_id);
+static sl_status_t zwave_tx_process_fetch_next_sendable_element(
+  zwave_tx_queue_element_t *next_element);
 
 /**
  * @brief Checks if the protocol is busy sending frames already
@@ -158,6 +174,91 @@ static void zwave_tx_process_initiate_backoff(clock_time_t backoff_time,
   PROCESS_CONTEXT_END(&zwave_tx_process);
 }
 
+static void zwave_tx_process_schedule_pending_response_timer()
+{
+  const clock_time_t deadline = pending_responses.earliest_deadline();
+  etimer_stop(&pending_response_timer);
+
+  if (deadline == 0) {
+    return;
+  }
+
+  const clock_time_t now = clock_time();
+  clock_time_t delay     = 1;
+  if (deadline > now) {
+    delay = deadline - now;
+  }
+
+  PROCESS_CONTEXT_BEGIN(&zwave_tx_process);
+  etimer_set(&pending_response_timer, delay);
+  PROCESS_CONTEXT_END(&zwave_tx_process);
+}
+
+static void
+  zwave_tx_process_finalize_pending_response(zwave_tx_session_id_t session_id)
+{
+  pending_responses.remove(session_id);
+  zwave_tx_finalize_element(session_id);
+  zwave_tx_process_schedule_pending_response_timer();
+}
+
+static void zwave_tx_process_expire_pending_responses()
+{
+  const clock_time_t now = clock_time();
+  pending_responses.for_each_expired(now, [](const auto &item) {
+    sl_log_debug(LOG_TAG,
+                 "Pending response timeout for NodeID %d (session id=%p).\n",
+                 item.node_id,
+                 item.session_id);
+    zwave_tx_process_finalize_pending_response(item.session_id);
+  });
+  zwave_tx_process_check_queue();
+}
+
+static bool zwave_tx_process_is_session_awaiting_response(
+  zwave_tx_session_id_t session_id)
+{
+  return pending_responses.is_session_pending(session_id);
+}
+
+static bool zwave_tx_process_is_node_blocked(zwave_node_id_t node_id)
+{
+  return pending_responses.is_node_waiting(node_id);
+}
+
+static sl_status_t zwave_tx_process_fetch_next_sendable_element(
+  zwave_tx_queue_element_t *next_element)
+{
+  return tx_queue.get_highest_priority_sendable_element(
+    next_element,
+    zwave_tx_process_is_session_awaiting_response,
+    zwave_tx_process_is_node_blocked);
+}
+
+static void zwave_tx_process_handle_pending_response_frame(
+  zwave_node_id_t node_id)
+{
+  pending_responses.for_each_on_node(node_id, [&](const auto &item) {
+    zwave_tx_queue_element_t current_element = {};
+    if (SL_STATUS_OK
+        != tx_queue.get_by_id(&current_element, item.session_id)) {
+      pending_responses.remove(item.session_id);
+      return;
+    }
+
+    if (current_element.options.number_of_responses <= 1) {
+      sl_log_debug(LOG_TAG,
+                   "Received all expected replies from NodeID "
+                   "%d for frame id=%p.\n",
+                   node_id,
+                   current_element.zwave_tx_session_id);
+      zwave_tx_process_finalize_pending_response(item.session_id);
+    } else {
+      tx_queue.decrement_expected_responses(item.session_id);
+    }
+  });
+}
+
 /**
  * @brief Resumes from back-off state.
  *
@@ -169,7 +270,7 @@ static void zwave_tx_resume_from_backoff_step()
 
   if (state == ZWAVE_TX_STATE_BACKOFF) {
     if (backoff_reason == BACKOFF_CURRENT_SESSION_ID) {
-      // Remove from the queue and make the correct state transision.
+      // Legacy path: finalize the session that timed out globally.
       zwave_tx_finalize_element(current_tx_session_id);
     } else if (backoff_reason == BACKOFF_EXPECTED_ADDITIONAL_FRAMES) {
       // Give up on waiting, for any additional frame.
@@ -204,6 +305,10 @@ static void zwave_tx_resume_from_backoff_step()
  */
 static bool is_frame_to_be_sent(const zwave_tx_queue_element_t &e)
 {
+  if (pending_responses.is_session_pending(e.zwave_tx_session_id)) {
+    return false;
+  }
+
   // Verify if the frame has expired and was not sent yet.
   if ((e.options.discard_timeout_ms > 0) && (e.transmission_timestamp == 0)
       && ((e.queue_timestamp + e.options.discard_timeout_ms) < clock_time())) {
@@ -284,8 +389,10 @@ static bool zwave_tx_can_ignore_incoming_frames()
       return false;
     }
   } else if (state == ZWAVE_TX_STATE_IDLE) {
-    // We are idle, take the highest priority element from the queue.
-    next_element = *tx_queue.first_in_queue();
+    if (SL_STATUS_OK
+        != zwave_tx_process_fetch_next_sendable_element(&next_element)) {
+      return false;
+    }
   }
 
   // Bypass if the frame has not been sent yet, and it allows us to bypass
@@ -314,9 +421,12 @@ static void zwave_tx_process_send_next_message_step()
       return;
     }
   } else if (state == ZWAVE_TX_STATE_IDLE) {
-    // We are idle, take the highest priority element from the queue.
-    current_element = *tx_queue.first_in_queue();
-    state           = ZWAVE_TX_STATE_TRANSMISSION_ONGOING;
+    if (SL_STATUS_OK
+        != zwave_tx_process_fetch_next_sendable_element(&current_element)) {
+      state = ZWAVE_TX_STATE_IDLE;
+      return;
+    }
+    state = ZWAVE_TX_STATE_TRANSMISSION_ONGOING;
   } else {
     // Other tx queue states should not try to call this function!
     sl_log_warning(LOG_TAG,
@@ -421,9 +531,18 @@ static void
       = completed_element.options.number_of_responses
         * (completed_element.transmission_time + CLOCK_SECOND);
     current_tx_session_id = session_id;
-    zwave_tx_process_initiate_backoff(backoff_time, BACKOFF_CURRENT_SESSION_ID);
-    // Here we will just return without removing the element from the queue
-    // just yet, so that we can match it with a response if we receive one.
+    if (SL_STATUS_OK
+        == pending_responses.add(
+          session_id,
+          completed_element.connection_info.remote.node_id,
+          clock_time() + backoff_time)) {
+      state = ZWAVE_TX_STATE_IDLE;
+      zwave_tx_process_schedule_pending_response_timer();
+      zwave_tx_process_check_queue();
+    } else {
+      zwave_tx_process_initiate_backoff(backoff_time,
+                                        BACKOFF_CURRENT_SESSION_ID);
+    }
     return;
   }
 
@@ -466,6 +585,11 @@ void zwave_tx_process_inspect_received_frame(zwave_node_id_t node_id)
     return;
   }
 
+  if (pending_responses.is_node_waiting(node_id)) {
+    zwave_tx_process_handle_pending_response_frame(node_id);
+    return;
+  }
+
   // If we are idle and received an unsolicited routed frame, initiate a back-off
   // If we were backing off due to unsolicited routed frame, restart the back-off
   if ((state == ZWAVE_TX_STATE_IDLE)
@@ -482,29 +606,16 @@ void zwave_tx_process_inspect_received_frame(zwave_node_id_t node_id)
     return;
   }
 
-  // Else here, we backed off due to our current frame:
+  // Legacy global back-off path when the pending-response list is full.
   zwave_tx_queue_element_t current_element;
   if (SL_STATUS_OK
       != tx_queue.get_by_id(&current_element, current_tx_session_id)) {
     return;
   }
 
-  // We only match the destination NodeID, not the payload.
   if ((backoff_reason == BACKOFF_CURRENT_SESSION_ID)
       && (node_id == current_element.connection_info.remote.node_id)) {
-    // Is that the last or do we need more replies?
-    if (current_element.options.number_of_responses <= 1) {
-      //We got the last needed reply:
-      sl_log_debug(LOG_TAG,
-                   "Received all expected replies from NodeID "
-                   "%d for frame id=%p.\n",
-                   node_id,
-                   current_element.zwave_tx_session_id);
-      zwave_tx_resume_from_backoff_step();
-    }
-
-    // Decrement the number of expected responses and wait for the next one.
-    tx_queue.decrement_expected_responses(current_tx_session_id);
+    zwave_tx_process_handle_pending_response_frame(node_id);
   }
 }
 
@@ -519,7 +630,12 @@ sl_status_t
   // Ensure to remove fasttrack requeueing.
   tx_queue.disable_fasttack(session_id);
 
-  // Ensure we are not stuck in a back-off for that frame
+  // Ensure we are not stuck waiting for a response for that frame
+  if (pending_responses.is_session_pending(session_id)) {
+    zwave_tx_process_finalize_pending_response(session_id);
+    return SL_STATUS_OK;
+  }
+
   if ((current_tx_session_id == session_id) && (state == ZWAVE_TX_STATE_BACKOFF)
       && (backoff_reason == BACKOFF_CURRENT_SESSION_ID)) {
     zwave_tx_resume_from_backoff_step();
@@ -568,8 +684,10 @@ sl_status_t zwave_tx_process_flush_queue_reset_step()
   // if we are in a back-off, shortcut the back-off
   if (state == ZWAVE_TX_STATE_BACKOFF) {
     zwave_tx_resume_from_backoff_step();
-    return SL_STATUS_OK;
   }
+
+  pending_responses.clear();
+  etimer_stop(&pending_response_timer);
 
   // If transmitting, ask the transport to abort the current element
   if (state == ZWAVE_TX_STATE_TRANSMISSION_ONGOING) {
@@ -663,6 +781,7 @@ PROCESS_THREAD(zwave_tx_process, ev, data)
       state = ZWAVE_TX_STATE_IDLE;
       tx_queue.clear();
       expected_incoming_frames.clear();
+      pending_responses.clear();
       zwave_tx_init();
       zwave_tx_route_cache_init();
       zwave_tx_process_open_tx_queue();
@@ -672,6 +791,7 @@ PROCESS_THREAD(zwave_tx_process, ev, data)
       state = ZWAVE_TX_STATE_IDLE;
       tx_queue.clear();
       expected_incoming_frames.clear();
+      pending_responses.clear();
       sl_log_info(LOG_TAG, "Z-Wave Tx process exited.\n");
 
     } else if (ev == PROCESS_EVENT_EXITED) {
@@ -701,6 +821,11 @@ PROCESS_THREAD(zwave_tx_process, ev, data)
         sl_log_debug(LOG_TAG,
                      "Tx backoff timer expired. Resuming from back-off.\n");
         zwave_tx_resume_from_backoff_step();
+      } else if (data == &pending_response_timer) {
+        sl_log_debug(LOG_TAG,
+                     "Pending response timer expired. Finalizing timed-out "
+                     "sessions.\n");
+        zwave_tx_process_expire_pending_responses();
       }
     } else {
       // If an event/state combination does not make sense, the
