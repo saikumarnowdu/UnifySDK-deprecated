@@ -45,8 +45,8 @@
  * transmissions, including back-off to wait for responses.
  *
  * The component features a prioritized queue by QoS. Frames with the highest
- * QoS are transmitted first. There is no guarantee over the order of elements
- * with identical QoS.
+ * QoS are transmitted first. When QoS is equal, frames to the same destination
+ * NodeID and endpoint are grouped before switching to another node.
  * The low-level encapsulation control frames,
  * such as nonce report etc, must be given the highest priority.
  *
