@@ -309,15 +309,32 @@ static void set_desired_on_all_endpoints(uint8_t desired)
   }
 }
 
-static uint32_t count_unmatched_desired(void)
+static uint32_t count_pending_sets(void)
 {
-  uint32_t unmatched = 0;
+  uint32_t pending = 0;
   for (uint32_t i = 0; i < cluster_attr_count; i++) {
-    if (!attribute_store_is_value_matched(cluster_attrs[i])) {
-      unmatched++;
+    if (attribute_store_is_desired_defined(cluster_attrs[i])
+        && !attribute_store_is_value_matched(cluster_attrs[i])) {
+      pending++;
     }
   }
-  return unmatched;
+  return pending;
+}
+
+static uint32_t count_reported_value(uint8_t expected)
+{
+  uint32_t matches = 0;
+  for (uint32_t i = 0; i < cluster_attr_count; i++) {
+    uint8_t reported = 0;
+    if (attribute_store_get_reported(cluster_attrs[i],
+                                     &reported,
+                                     sizeof(reported))
+          == SL_STATUS_OK
+        && reported == expected) {
+      matches++;
+    }
+  }
+  return matches;
 }
 
 static void reset_tx_counters(void)
@@ -435,7 +452,7 @@ void test_resolver_serializes_sets_through_zwave_tx_queue(void)
   contiki_test_helper_run(0);
 
   set_desired_on_all_endpoints(0xFF);
-  TEST_ASSERT_EQUAL(expected_sets, count_unmatched_desired());
+  TEST_ASSERT_EQUAL(expected_sets, count_pending_sets());
 
   uint32_t idle_spins = 0;
   uint32_t steps      = 0;
@@ -460,7 +477,8 @@ void test_resolver_serializes_sets_through_zwave_tx_queue(void)
   TEST_ASSERT_EQUAL(expected_sets, tx_completed);
   TEST_ASSERT_EQUAL(expected_sets, tx_accepted);
   TEST_ASSERT_EQUAL(0, tx_rejected);
-  TEST_ASSERT_EQUAL(0, count_unmatched_desired());
+  TEST_ASSERT_EQUAL(0, count_pending_sets());
+  TEST_ASSERT_EQUAL(expected_sets, count_reported_value(0xFF));
   TEST_ASSERT_EQUAL(1, max_resolver_in_flight);
   TEST_ASSERT_EQUAL(1, max_tx_queue_occupancy);
   TEST_ASSERT_EQUAL(1, first_send.node_id);
