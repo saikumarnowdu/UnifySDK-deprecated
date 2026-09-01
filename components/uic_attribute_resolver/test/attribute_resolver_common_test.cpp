@@ -2091,4 +2091,65 @@ void test_rule_timeout_for_get_command()
   TEST_ASSERT_FALSE(
     attribute_store_is_value_defined(node_7, REPORTED_ATTRIBUTE));
 }
+
+static sl_status_t test_set_resolution_function_lane_b(attribute_store_node_t node,
+                                                       uint8_t *frame,
+                                                       uint16_t *frame_len)
+{
+  *frame_len = 0;
+  test_set_function_call_count += 1;
+  return set_function_return_code;
+}
+
+static uintptr_t test_parallel_lane(attribute_store_node_t node)
+{
+  return static_cast<uintptr_t>(node);
+}
+
+void test_attribute_resolver_parallel_lanes()
+{
+  attribute_resolver_teardown();
+  attribute_store_delete_node(attribute_store_get_root());
+
+  value = 1;
+  const attribute_store_node_t node_a
+    = attribute_store_add_node(901, attribute_store_get_root());
+  const attribute_store_node_t node_b
+    = attribute_store_add_node(902, attribute_store_get_root());
+  attribute_store_set_reported(node_a, &value, sizeof(value));
+  attribute_store_set_reported(node_b, &value, sizeof(value));
+  attribute_store_set_desired(node_a, &value, sizeof(value));
+  attribute_store_set_desired(node_b, &value, sizeof(value));
+
+  attribute_resolver_config_t config = {};
+  config.send_init                   = &test_send_init_function;
+  config.send                        = &test_send_function;
+  config.abort                       = &test_abort_function;
+  config.get_parallel_lane           = &test_parallel_lane;
+  config.get_retry_timeout           = TEST_GET_RETRY_TIMEOUT;
+  config.get_retry_count             = TEST_GET_RETRY_COUNT;
+  attribute_resolver_init(config);
+  contiki_test_helper_run(0);
+
+  attribute_resolver_register_rule(attribute_store_get_node_type(node_a),
+                                   &test_set_resolution_function,
+                                   NULL);
+  attribute_resolver_register_rule(attribute_store_get_node_type(node_b),
+                                   &test_set_resolution_function_lane_b,
+                                   NULL);
+
+  value = 99;
+  attribute_store_set_desired(node_a, &value, sizeof(value));
+  attribute_store_set_desired(node_b, &value, sizeof(value));
+
+  send_function_return_code        = SL_STATUS_OK;
+  set_function_return_code         = SL_STATUS_OK;
+  expected_node_for_resolution     = ATTRIBUTE_STORE_INVALID_NODE;
+
+  contiki_test_helper_run(1);
+
+  TEST_ASSERT_EQUAL(2, test_send_function_call_count);
+  TEST_ASSERT_EQUAL(2, test_set_function_call_count);
+  TEST_ASSERT_TRUE(attribute_resolver_rule_busy());
+}
 }

@@ -42,6 +42,14 @@ static enum {
   RESOLVER_EXECUTING_GET_RULE,
 } resolver_state;
 
+typedef struct {
+  attribute_store_node_t node;
+  uint8_t resolver_state;
+  bool needs_more_frames;
+  clock_time_t deadline;
+} lane_execution_t;
+
+static std::map<uintptr_t, lane_execution_t> active_lane_executions;
 static std::map<attribute_store_type_t, struct attribute_rule> rule_book;
 static std::map<attribute_store_type_t, int> relatives;
 
@@ -54,11 +62,66 @@ static std::multimap<attribute_resolver_function_t, attribute_store_type_t>
   set_group;
 
 static attribute_rule_complete_t compl_func;
-static attribute_store_node_t node_pending_resolution
-  = ATTRIBUTE_STORE_INVALID_NODE;
-static bool node_needs_more_frames = false;
-// Timer to limit how long we try to execute a rule
+// Timer to limit how long we try to execute a rule on any lane
 static struct ctimer rule_execution_timer;
+
+static void on_rule_execution_timeout(void *user);
+
+static uintptr_t attribute_resolver_rule_get_lane(attribute_store_node_t node)
+{
+  attribute_resolver_get_parallel_lane_t get_parallel_lane
+    = attribute_resolver_get_config().get_parallel_lane;
+  if (get_parallel_lane == nullptr) {
+    return 0;
+  }
+  return get_parallel_lane(node);
+}
+
+static void attribute_resolver_rule_schedule_timeout_timer()
+{
+  ctimer_stop(&rule_execution_timer);
+
+  clock_time_t next_deadline = 0;
+  for (const auto &lane: active_lane_executions) {
+    if ((next_deadline == 0) || (lane.second.deadline < next_deadline)) {
+      next_deadline = lane.second.deadline;
+    }
+  }
+
+  if (next_deadline == 0) {
+    return;
+  }
+
+  clock_time_t now    = clock_time();
+  clock_time_t delay  = 1;
+  if (next_deadline > now) {
+    delay = next_deadline - now;
+  }
+
+  ctimer_set(&rule_execution_timer, delay, &on_rule_execution_timeout, nullptr);
+}
+
+static void attribute_resolver_rule_clear_lane(uintptr_t lane)
+{
+  active_lane_executions.erase(lane);
+  if (active_lane_executions.empty()) {
+    resolver_state = RESOLVER_IDLE;
+    ctimer_stop(&rule_execution_timer);
+  } else {
+    attribute_resolver_rule_schedule_timeout_timer();
+  }
+}
+
+static lane_execution_t *
+  attribute_resolver_rule_find_lane_execution(attribute_store_node_t node)
+{
+  for (auto &lane: active_lane_executions) {
+    if (lane.second.node == node) {
+      return &lane.second;
+    }
+  }
+  return nullptr;
+}
 
 // We have a list of "callback" functions,
 // that we notify when we get new "set" rules
@@ -117,16 +180,31 @@ static const char *
 
 void on_rule_execution_timeout(void *user)
 {
-  sl_log_error(LOG_TAG,
-               "Rule execution timed out for Attribute ID %d. "
-               "Considering rule execution failed.",
-               node_pending_resolution);
-  on_resolver_send_data_complete(RESOLVER_SEND_STATUS_FAIL,
-                                 MAX_RESOLUTION_TIME,
-                                 node_pending_resolution,
-                                 resolver_state == RESOLVER_EXECUTING_SET_RULE
-                                   ? RESOLVER_SET_RULE
-                                   : RESOLVER_GET_RULE);
+  (void)user;
+  const clock_time_t now = clock_time();
+
+  for (const auto &lane: active_lane_executions) {
+    if (lane.second.deadline > now) {
+      continue;
+    }
+
+    sl_log_error(LOG_TAG,
+                 "Rule execution timed out for Attribute ID %d on lane %lu. "
+                 "Considering rule execution failed.",
+                 lane.second.node,
+                 (unsigned long)lane.first);
+    const resolver_rule_type_t rule_type
+      = lane.second.resolver_state == RESOLVER_EXECUTING_SET_RULE
+          ? RESOLVER_SET_RULE
+          : RESOLVER_GET_RULE;
+    on_resolver_send_data_complete(RESOLVER_SEND_STATUS_FAIL,
+                                   MAX_RESOLUTION_TIME,
+                                   lane.second.node,
+                                   rule_type);
+    return;
+  }
+
+  attribute_resolver_rule_schedule_timeout_timer();
 }
 
 /**
@@ -210,9 +288,10 @@ void on_resolver_send_data_complete(resolver_send_status_t status,
 
   // "Needs more frames" is only saved for the node pending resolution.
   bool needs_more_frames = false;
-  if ((_node == node_pending_resolution)
-      && (_node != ATTRIBUTE_STORE_INVALID_NODE)) {
-    needs_more_frames = node_needs_more_frames;
+  lane_execution_t *lane_execution
+    = attribute_resolver_rule_find_lane_execution(_node);
+  if (lane_execution != nullptr) {
+    needs_more_frames = lane_execution->needs_more_frames;
   }
 
   sl_log_debug(LOG_TAG,
@@ -294,11 +373,10 @@ void on_resolver_send_data_complete(resolver_send_status_t status,
   }
 
   // It's an initial callback for a node, so that we can execute the next rule
-  if (node_pending_resolution == _node) {
-    node_pending_resolution = ATTRIBUTE_STORE_INVALID_NODE;
-    resolver_state          = RESOLVER_IDLE;
+  if (lane_execution != nullptr) {
+    attribute_resolver_rule_clear_lane(
+      attribute_resolver_rule_get_lane(_node));
     compl_func(_node, transmission_time);
-    ctimer_stop(&rule_execution_timer);
   }
 }
 
@@ -327,7 +405,8 @@ sl_status_t attribute_resolver_rule_execute(attribute_store_node_t node,
     return SL_STATUS_NOT_FOUND;
   }
 
-  if (attribute_resolver_rule_busy() == true) {
+  const uintptr_t lane = attribute_resolver_rule_get_lane(node);
+  if (active_lane_executions.count(lane) > 0) {
     return SL_STATUS_BUSY;
   }
 
@@ -351,18 +430,19 @@ sl_status_t attribute_resolver_rule_execute(attribute_store_node_t node,
                                                  frame_size,
                                                  set_rule)
             == SL_STATUS_OK) {
-          resolver_state = set_rule ? RESOLVER_EXECUTING_SET_RULE
-                                    : RESOLVER_EXECUTING_GET_RULE;
-          ctimer_set(&rule_execution_timer,
-                     MAX_RESOLUTION_TIME,
-                     &on_rule_execution_timeout,
-                     nullptr);
-          node_pending_resolution = node;
+          const auto executing_state = set_rule ? RESOLVER_EXECUTING_SET_RULE
+                                                : RESOLVER_EXECUTING_GET_RULE;
+          resolver_state               = executing_state;
+          active_lane_executions[lane] = {
+            .node              = node,
+            .resolver_state    = static_cast<uint8_t>(executing_state),
+            .needs_more_frames = frame_status == SL_STATUS_IN_PROGRESS,
+            .deadline          = clock_time() + MAX_RESOLUTION_TIME,
+          };
+          attribute_resolver_rule_schedule_timeout_timer();
           if (frame_status == SL_STATUS_IN_PROGRESS) {
-            node_needs_more_frames = true;
             return SL_STATUS_IN_PROGRESS;
           } else {
-            node_needs_more_frames = false;
             return SL_STATUS_OK;
           }
 
@@ -422,29 +502,33 @@ void attribute_resolver_rule_init(attribute_rule_complete_t __compl_func)
   relatives.clear();
   compl_func = __compl_func;
   rule_book.clear();
+  active_lane_executions.clear();
   resolver_state = RESOLVER_IDLE;
+  ctimer_stop(&rule_execution_timer);
 }
 
 bool attribute_resolver_rule_busy()
 {
-  if (resolver_state != RESOLVER_IDLE) {
-    sl_log_debug(LOG_TAG,
-                 "Resolver busy! waiting for node %d",
-                 node_pending_resolution);
-    attribute_store_log_node(node_pending_resolution, false);
-  }
-  return resolver_state != RESOLVER_IDLE;
+  return !active_lane_executions.empty();
+}
+
+bool attribute_resolver_rule_busy_for_node(attribute_store_node_t node)
+{
+  const uintptr_t lane = attribute_resolver_rule_get_lane(node);
+  return active_lane_executions.count(lane) > 0;
 }
 
 void attribute_resolver_rule_abort(attribute_store_node_t node)
 {
-  // Abort executing a rule (or waiting for a callback)
-  if (node_pending_resolution == node) {
-    node_pending_resolution = ATTRIBUTE_STORE_INVALID_NODE;
-    resolver_state          = RESOLVER_IDLE;
-    compl_func(node, 0);
-    ctimer_stop(&rule_execution_timer);
+  lane_execution_t *lane_execution
+    = attribute_resolver_rule_find_lane_execution(node);
+  if (lane_execution == nullptr) {
+    return;
   }
+
+  const uintptr_t lane = attribute_resolver_rule_get_lane(node);
+  attribute_resolver_rule_clear_lane(lane);
+  compl_func(node, 0);
 }
 
 attribute_resolver_function_t

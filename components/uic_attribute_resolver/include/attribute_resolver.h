@@ -57,6 +57,20 @@ extern "C" {
  *
  * @ingroup attribute_resolver
  */
+/**
+ * @brief Returns a parallel execution lane id for an attribute node.
+ *
+ * Attributes that share the same lane id are resolved one at a time.
+ * Attributes on different lanes may be resolved concurrently.
+ *
+ * When this callback is NULL, all attributes share a single global lane.
+ *
+ * @param node Attribute store node about to be resolved.
+ * @returns Lane identifier. Must be non-zero for distinct parallel lanes.
+ */
+typedef uintptr_t (*attribute_resolver_get_parallel_lane_t)(
+  attribute_store_node_t node);
+
 typedef struct {
   void (*send_init)(void);
   sl_status_t (*send)(attribute_store_node_t node,
@@ -64,6 +78,8 @@ typedef struct {
                       uint16_t frame_data_len,
                       bool is_set);
   sl_status_t (*abort)(attribute_store_node_t node);
+  /// Optional lane selector for parallel rule execution across destinations.
+  attribute_resolver_get_parallel_lane_t get_parallel_lane;
   // Retry timeout for get commands
   clock_time_t get_retry_timeout;
   // Number of times to retry sending a get

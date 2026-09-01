@@ -65,6 +65,8 @@ multi_invoke<attribute_store_type_t, attribute_store_node_t>
 // on a node.
 resumption_listeners_t resumption_listeners;
 attribute_resolver_config_t attribute_resolver_config;
+// Nodes deferred in the current scan because their lane was busy.
+std::unordered_set<attribute_store_node_t> lane_busy_deferred_nodes;
 }  // namespace
 
 /*
@@ -564,8 +566,15 @@ static sl_status_t execute_set(attribute_store_node_t node)
  *
  * The execution order will be: C D B E A
  */
+static bool attribute_resolver_parallel_lanes_enabled()
+{
+  return attribute_resolver_config.get_parallel_lane != nullptr;
+}
+
 static void resolver_find_next_resolve()
 {
+  lane_busy_deferred_nodes.clear();
+
   while (!stack.empty()) {
     attribute_store_node_t node = stack.back().first;
     uint32_t index              = stack.back().second;
@@ -606,8 +615,11 @@ static void resolver_find_next_resolve()
         rule_status = execute_set(node);
       }
 
-      // If a rule was executed successfully, we return and wait for a callback
+      // If a rule was executed successfully, keep scanning for more parallel work.
       if (rule_status == SL_STATUS_OK || rule_status == SL_STATUS_IN_PROGRESS) {
+        if (attribute_resolver_parallel_lanes_enabled()) {
+          continue;
+        }
         return;
       }
       // Resolution of this node is done with no frame
@@ -621,6 +633,20 @@ static void resolver_find_next_resolve()
         sl_log_debug(LOG_TAG,
                      "Attribute ID %d resolution is working. Skipping\n",
                      node);
+        continue;
+      }
+
+      if (rule_status == SL_STATUS_BUSY) {
+        sl_log_debug(LOG_TAG,
+                     "Attribute ID %d lane is busy. Skipping for now.\n",
+                     node);
+        if (attribute_resolver_parallel_lanes_enabled()) {
+          if (lane_busy_deferred_nodes.count(node) > 0) {
+            return;
+          }
+          lane_busy_deferred_nodes.insert(node);
+          stack.push_back({node, index});
+        }
         continue;
       }
 
@@ -991,6 +1017,7 @@ static sl_status_t
     = {.send_init         = resolver_config.send_init,
        .send              = resolver_config.send,
        .abort             = resolver_config.abort,
+       .get_parallel_lane = resolver_config.get_parallel_lane,
        .get_retry_timeout = resolver_config.get_retry_timeout,
        .get_retry_count   = resolver_config.get_retry_count};
   return SL_STATUS_OK;
@@ -1043,8 +1070,10 @@ static void attribute_resolver_ev_next()
     stack.push_back(
       std::pair<attribute_store_node_t, int>(attribute_store_get_root(), 0));
   }
-  // Find next node to resolve
-  if (!attribute_resolver_rule_busy()) {
+  // Find next node(s) to resolve.
+  if (attribute_resolver_parallel_lanes_enabled()) {
+    resolver_find_next_resolve();
+  } else if (!attribute_resolver_rule_busy()) {
     resolver_find_next_resolve();
   }
 }
