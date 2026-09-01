@@ -58,3 +58,14 @@ target_add_unittest(
   uic_contiki_stub
   EXCLUDE
   src/attribute_resolver_rule.cpp)
+
+# 232-node SET resolution through a mocked 64-slot zwave_tx queue
+target_add_unittest(
+  uic_attribute_resolver_shared
+  NAME
+  zwave_resolver_tx_queue_load_test
+  SOURCES
+  zwave_resolver_tx_queue_load_test.c
+  DEPENDS
+  uic_contiki_stub
+  uic_log)
