@@ -68,10 +68,19 @@ void attribute_resolver_rule_init(attribute_rule_complete_t compl_func);
 /**
  * @brief Check if the resolver is currently executing a rule.
  *
- * @return true Resolver is executing
- * @return false  Resolver is not executing.
+ * @return true Resolver is executing at least one rule
+ * @return false  Resolver is not executing any rule.
  */
 bool attribute_resolver_rule_busy();
+
+/**
+ * @brief Check if the resolver lane for a node is busy.
+ *
+ * @param node Attribute store node to check.
+ * @return true The lane for this node already has an in-flight rule.
+ * @return false The lane is free.
+ */
+bool attribute_resolver_rule_busy_for_node(attribute_store_node_t node);
 
 /**
  * @brief Stop waiting for a send data callback for a given node.
