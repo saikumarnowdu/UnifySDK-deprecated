@@ -18,12 +18,18 @@
 
 // Unify Components includes
 #include "attribute_resolver.h"
+#include "zwave_tx.h"
 
 sl_status_t zpc_attribute_resolver_init()
 {
   sl_status_t init_status = SL_STATUS_OK;
   // Initialize our group handling component.
   init_status |= zpc_attribute_resolver_group_init();
+
+  uint8_t max_inflight = ZWAVE_TX_QUEUE_BUFFER_SIZE;
+  if (max_inflight > 1) {
+    max_inflight = (uint8_t)(ZWAVE_TX_QUEUE_BUFFER_SIZE - 1);
+  }
 
   attribute_resolver_config_t attribute_resolver_config
     = {.send_init = &attribute_resolver_send_init,
@@ -32,7 +38,9 @@ sl_status_t zpc_attribute_resolver_init()
        // Minimal timespan before retrying a get
        .get_retry_timeout = 3000,
        // Number of times to retry sending a get
-       .get_retry_count = 5};
+       .get_retry_count = 5,
+       // Fill free TX slots instead of one-in-flight + reject-on-full.
+       .max_inflight_resolutions = max_inflight};
   init_status |= attribute_resolver_init(attribute_resolver_config);
   return init_status;
 }

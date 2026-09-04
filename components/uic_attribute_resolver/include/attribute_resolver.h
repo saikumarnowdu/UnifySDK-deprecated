@@ -68,6 +68,10 @@ typedef struct {
   clock_time_t get_retry_timeout;
   // Number of times to retry sending a get
   uint8_t get_retry_count;
+  /// Max concurrent send() calls. 0 means 1 (legacy one-in-flight).
+  /// ZPC sets this from the TX queue depth so resolutions fill free slots
+  /// instead of being rejected when the queue is full.
+  uint8_t max_inflight_resolutions;
 } attribute_resolver_config_t;
 
 /**

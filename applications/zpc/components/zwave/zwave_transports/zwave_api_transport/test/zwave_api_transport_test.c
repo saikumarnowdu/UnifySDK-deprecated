@@ -781,9 +781,8 @@ void test_zwave_api_transport_send_data_intercept_nop()
   info.remote.node_id   = 3;
   const uint8_t frame[] = {0x00};
 
-  uint8_t expected_zwapi_tx_options = TRANSMIT_OPTION_ACK
-                                      | TRANSMIT_OPTION_AUTO_ROUTE
-                                      | TRANSMIT_OPTION_EXPLORE;
+  uint8_t expected_zwapi_tx_options
+    = TRANSMIT_OPTION_ACK | TRANSMIT_OPTION_AUTO_ROUTE;
 
   zwapi_send_nop_ExpectAndReturn(info.remote.node_id,
                                  expected_zwapi_tx_options,

@@ -1290,24 +1290,49 @@ void test_attribute_resolver_send_data_cannot_send()
   TEST_ASSERT_EQUAL(1, test_set_function_call_count);
   TEST_ASSERT_EQUAL(0, test_get_function_call_count);
 
-  // Now the resolution stalls.
-  // Should we try again spontaneously when a frame could not be prepared ?
-
-  // Values of the attribute should be unchanged.
+  // Desired is kept. Retry when TX capacity timer fires (CLOCK_SECOND / 10).
   attribute_store_get_desired(node_10, &value, sizeof(value));
   TEST_ASSERT_EQUAL(expected_value, value);
   expected_value = 10;
   attribute_store_get_reported(node_10, &value, sizeof(value));
   TEST_ASSERT_EQUAL(expected_value, value);
 
-  // Nothing should happen if we ask the resolver to look at the stack:
-  contiki_test_helper_run(1);
+  expected_value = 34;
+  contiki_test_helper_run(CLOCK_SECOND / 10);
+  TEST_ASSERT_EQUAL(2, test_send_function_call_count);
+  TEST_ASSERT_EQUAL(2, test_set_function_call_count);
+}
 
-  TEST_ASSERT_EQUAL(1, test_send_function_call_count);
-  TEST_ASSERT_EQUAL(1, test_set_function_call_count);
-  TEST_ASSERT_EQUAL(0, test_get_function_call_count);
+void test_attribute_resolver_pipelines_sends_up_to_max_inflight()
+{
+  attribute_resolver_teardown();
+  attribute_resolver_config_t config = {};
+  config.send_init                   = &test_send_init_function;
+  config.send                        = &test_send_function;
+  config.abort                       = &test_abort_function;
+  config.get_retry_timeout           = TEST_GET_RETRY_TIMEOUT;
+  config.get_retry_count             = TEST_GET_RETRY_COUNT;
+  config.max_inflight_resolutions    = 2;
+  test_send_init_function_call_count = 0;
+  attribute_resolver_init(config);
+  contiki_test_helper_run(0);
 
-  contiki_test_helper_run(1);
+  attribute_resolver_register_rule(attribute_store_get_node_type(node_8),
+                                   &test_set_resolution_function,
+                                   NULL);
+  attribute_resolver_register_rule(attribute_store_get_node_type(node_9),
+                                   &test_set_resolution_function,
+                                   NULL);
+
+  value = 99;
+  attribute_store_set_desired(node_8, &value, sizeof(value));
+  attribute_store_set_desired(node_9, &value, sizeof(value));
+  expected_node_for_resolution = ATTRIBUTE_STORE_INVALID_NODE;
+  send_function_return_code    = SL_STATUS_OK;
+
+  contiki_test_helper_run(0);
+  TEST_ASSERT_EQUAL(2, test_send_function_call_count);
+  TEST_ASSERT_TRUE(attribute_resolver_rule_busy());
 }
 
 void test_attribute_resolver_set_rule_status_fails_to_prepare_frame()

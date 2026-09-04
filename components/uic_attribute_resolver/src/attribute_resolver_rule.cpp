@@ -45,6 +45,20 @@ static enum {
 static std::map<attribute_store_type_t, struct attribute_rule> rule_book;
 static std::map<attribute_store_type_t, int> relatives;
 
+struct pending_rule {
+  resolver_rule_type_t rule_type;
+  bool needs_more_frames;
+};
+
+static std::map<attribute_store_node_t, pending_rule> nodes_pending_resolution;
+
+static uint8_t attribute_resolver_max_inflight()
+{
+  const uint8_t max
+    = attribute_resolver_get_config().max_inflight_resolutions;
+  return max == 0 ? 1 : max;
+}
+
 /* Set of attributes in the same report message, this is deducted form the get function */
 static std::multimap<attribute_resolver_function_t, attribute_store_type_t>
   get_group;
@@ -115,18 +129,20 @@ static const char *
   }
 }
 
-void on_rule_execution_timeout(void *user)
+void on_rule_execution_timeout([[maybe_unused]] void *user)
 {
+  if (nodes_pending_resolution.empty()) {
+    return;
+  }
+  const auto pending = nodes_pending_resolution.begin();
   sl_log_error(LOG_TAG,
                "Rule execution timed out for Attribute ID %d. "
                "Considering rule execution failed.",
-               node_pending_resolution);
+               pending->first);
   on_resolver_send_data_complete(RESOLVER_SEND_STATUS_FAIL,
                                  MAX_RESOLUTION_TIME,
-                                 node_pending_resolution,
-                                 resolver_state == RESOLVER_EXECUTING_SET_RULE
-                                   ? RESOLVER_SET_RULE
-                                   : RESOLVER_GET_RULE);
+                                 pending->first,
+                                 pending->second.rule_type);
 }
 
 /**
@@ -208,11 +224,10 @@ void on_resolver_send_data_complete(resolver_send_status_t status,
   using namespace attribute_store;
   attribute node = _node;
 
-  // "Needs more frames" is only saved for the node pending resolution.
   bool needs_more_frames = false;
-  if ((_node == node_pending_resolution)
-      && (_node != ATTRIBUTE_STORE_INVALID_NODE)) {
-    needs_more_frames = node_needs_more_frames;
+  auto pending_it        = nodes_pending_resolution.find(_node);
+  if (pending_it != nodes_pending_resolution.end()) {
+    needs_more_frames = pending_it->second.needs_more_frames;
   }
 
   sl_log_debug(LOG_TAG,
@@ -294,11 +309,16 @@ void on_resolver_send_data_complete(resolver_send_status_t status,
   }
 
   // It's an initial callback for a node, so that we can execute the next rule
-  if (node_pending_resolution == _node) {
-    node_pending_resolution = ATTRIBUTE_STORE_INVALID_NODE;
-    resolver_state          = RESOLVER_IDLE;
+  if (pending_it != nodes_pending_resolution.end()) {
+    nodes_pending_resolution.erase(pending_it);
+    if (nodes_pending_resolution.empty()) {
+      node_pending_resolution = ATTRIBUTE_STORE_INVALID_NODE;
+      resolver_state          = RESOLVER_IDLE;
+      ctimer_stop(&rule_execution_timer);
+    } else {
+      node_pending_resolution = nodes_pending_resolution.begin()->first;
+    }
     compl_func(_node, transmission_time);
-    ctimer_stop(&rule_execution_timer);
   }
 }
 
@@ -358,6 +378,11 @@ sl_status_t attribute_resolver_rule_execute(attribute_store_node_t node,
                      &on_rule_execution_timeout,
                      nullptr);
           node_pending_resolution = node;
+          pending_rule pending    = {};
+          pending.rule_type
+            = set_rule ? RESOLVER_SET_RULE : RESOLVER_GET_RULE;
+          pending.needs_more_frames = (frame_status == SL_STATUS_IN_PROGRESS);
+          nodes_pending_resolution[node] = pending;
           if (frame_status == SL_STATUS_IN_PROGRESS) {
             node_needs_more_frames = true;
             return SL_STATUS_IN_PROGRESS;
@@ -367,7 +392,9 @@ sl_status_t attribute_resolver_rule_execute(attribute_store_node_t node,
           }
 
         } else {
-          resolver_state = RESOLVER_IDLE;
+          if (nodes_pending_resolution.empty()) {
+            resolver_state = RESOLVER_IDLE;
+          }
           return SL_STATUS_NOT_READY;
         }
       }
@@ -422,28 +449,48 @@ void attribute_resolver_rule_init(attribute_rule_complete_t __compl_func)
   relatives.clear();
   compl_func = __compl_func;
   rule_book.clear();
+  nodes_pending_resolution.clear();
+  node_pending_resolution = ATTRIBUTE_STORE_INVALID_NODE;
   resolver_state = RESOLVER_IDLE;
 }
 
 bool attribute_resolver_rule_busy()
 {
-  if (resolver_state != RESOLVER_IDLE) {
+  for (const auto &pending: nodes_pending_resolution) {
+    if (pending.second.needs_more_frames) {
+      sl_log_debug(LOG_TAG,
+                   "Resolver busy! waiting for more frames on node %d",
+                   pending.first);
+      return true;
+    }
+  }
+  const bool busy
+    = nodes_pending_resolution.size() >= attribute_resolver_max_inflight();
+  if (busy) {
     sl_log_debug(LOG_TAG,
-                 "Resolver busy! waiting for node %d",
+                 "Resolver busy! %zu in flight (max %u), waiting for node %d",
+                 nodes_pending_resolution.size(),
+                 attribute_resolver_max_inflight(),
                  node_pending_resolution);
     attribute_store_log_node(node_pending_resolution, false);
   }
-  return resolver_state != RESOLVER_IDLE;
+  return busy;
 }
 
 void attribute_resolver_rule_abort(attribute_store_node_t node)
 {
   // Abort executing a rule (or waiting for a callback)
-  if (node_pending_resolution == node) {
-    node_pending_resolution = ATTRIBUTE_STORE_INVALID_NODE;
-    resolver_state          = RESOLVER_IDLE;
+  auto pending_it = nodes_pending_resolution.find(node);
+  if (pending_it != nodes_pending_resolution.end()) {
+    nodes_pending_resolution.erase(pending_it);
+    if (nodes_pending_resolution.empty()) {
+      node_pending_resolution = ATTRIBUTE_STORE_INVALID_NODE;
+      resolver_state          = RESOLVER_IDLE;
+      ctimer_stop(&rule_execution_timer);
+    } else {
+      node_pending_resolution = nodes_pending_resolution.begin()->first;
+    }
     compl_func(node, 0);
-    ctimer_stop(&rule_execution_timer);
   }
 }
 

@@ -80,6 +80,8 @@ typedef struct {
 // Pending Get resolutions
 static std::map<attribute_store_node_t, pending_get_t> pending_get_resolutions;
 struct etimer pending_get_resume_timer;
+struct etimer tx_capacity_retry_timer;
+static bool tx_capacity_retry_armed = false;
 // Pending Sets resolutions <map of attribute nodes / needs more frame boolean
 static std::map<attribute_store_node_t, bool> pending_set_resolutions;
 
@@ -564,6 +566,16 @@ static sl_status_t execute_set(attribute_store_node_t node)
  *
  * The execution order will be: C D B E A
  */
+static void schedule_resolver_tx_capacity_retry()
+{
+  scan_requested = true;
+  if (tx_capacity_retry_armed && !etimer_expired(&tx_capacity_retry_timer)) {
+    return;
+  }
+  tx_capacity_retry_armed = true;
+  etimer_set(&tx_capacity_retry_timer, CLOCK_SECOND / 10);
+}
+
 static void resolver_find_next_resolve()
 {
   while (!stack.empty()) {
@@ -606,9 +618,20 @@ static void resolver_find_next_resolve()
         rule_status = execute_set(node);
       }
 
-      // If a rule was executed successfully, we return and wait for a callback
-      if (rule_status == SL_STATUS_OK || rule_status == SL_STATUS_IN_PROGRESS) {
+      // IN_PROGRESS (multi-frame attribute) must wait for that node.
+      if (rule_status == SL_STATUS_IN_PROGRESS) {
         return;
+      }
+      // Send accepted. Fill remaining TX slots when max_inflight > 1.
+      if (rule_status == SL_STATUS_OK) {
+        const uint8_t max_inflight
+          = attribute_resolver_config.max_inflight_resolutions == 0
+              ? 1
+              : attribute_resolver_config.max_inflight_resolutions;
+        if (max_inflight <= 1 || attribute_resolver_rule_busy()) {
+          return;
+        }
+        continue;
       }
       // Resolution of this node is done with no frame
       if (rule_status == SL_STATUS_NOT_INITIALIZED
@@ -627,9 +650,11 @@ static void resolver_find_next_resolve()
       if (rule_status == SL_STATUS_NOT_READY) {
         sl_log_debug(LOG_TAG,
                      "Send function is not ready to send. "
-                     "Skipping attribute ID %d resolution.\n",
+                     "Deferring attribute ID %d until TX has capacity.\n",
                      node);
-        continue;
+        stack.clear();
+        schedule_resolver_tx_capacity_retry();
+        return;
       }
 
       sl_log_info(LOG_TAG,
@@ -988,11 +1013,12 @@ static sl_status_t
     return SL_STATUS_FAIL;
   }
   attribute_resolver_config
-    = {.send_init         = resolver_config.send_init,
-       .send              = resolver_config.send,
-       .abort             = resolver_config.abort,
-       .get_retry_timeout = resolver_config.get_retry_timeout,
-       .get_retry_count   = resolver_config.get_retry_count};
+    = {.send_init                  = resolver_config.send_init,
+       .send                       = resolver_config.send,
+       .abort                      = resolver_config.abort,
+       .get_retry_timeout          = resolver_config.get_retry_timeout,
+       .get_retry_count            = resolver_config.get_retry_count,
+       .max_inflight_resolutions = resolver_config.max_inflight_resolutions};
   return SL_STATUS_OK;
 }
 
@@ -1006,6 +1032,8 @@ sl_status_t attribute_resolver_init(attribute_resolver_config_t resolver_config)
   pending_set_resolutions.clear();
   stack.clear();
   etimer_stop(&pending_get_resume_timer);
+  etimer_stop(&tx_capacity_retry_timer);
+  tx_capacity_retry_armed = false;
   scan_requested = true;
 
   attribute_resolver_rule_init(on_resolver_rule_execute_complete);
@@ -1073,6 +1101,10 @@ PROCESS_THREAD(attribute_resolver_process, ev, data)
     } else if ((ev == PROCESS_EVENT_TIMER)
                && (data == &pending_get_resume_timer)) {
       attribute_resume_expired_pending_get_nodes();
+    } else if ((ev == PROCESS_EVENT_TIMER)
+               && (data == &tx_capacity_retry_timer)) {
+      tx_capacity_retry_armed = false;
+      process_post(&attribute_resolver_process, RESOLVER_NEXT_EVENT, nullptr);
     } else if (ev == RESOLVER_TIMER_SET_EVENT) {
       sl_log_debug(LOG_TAG,
                    "Restarting timer for pending Get resolutions. Next "
