@@ -16,6 +16,7 @@
 
 // Includes from this component
 #include "zwave_tx.h"
+#include "zwave_tx_route_cache.h"
 
 // Includes from other components
 #include "sl_status.h"
@@ -24,6 +25,7 @@
 #include "sys/etimer.h"
 
 #include "priority_queue.hpp"
+#include <cstring>
 
 /**
  * @defgroup zwave_tx_queue Z-Wave TX queue
@@ -126,6 +128,51 @@ struct queue_element_qos_compare {
   }
 };
 
+/**
+ * Send-time ordering: QoS class first, then last-known radio quality.
+ *
+ * Used only when picking the next frame to transmit so the queue container
+ * comparator stays stable. Prefer listening/direct/fast/strong-RSSI nodes
+ * among frames that share the same qos_priority.
+ */
+struct queue_element_send_compare {
+  bool operator()(const zwave_tx_queue_element_t &lhs,
+                  const zwave_tx_queue_element_t &rhs) const
+  {
+    if (lhs.options.qos_priority != rhs.options.qos_priority) {
+      return lhs.options.qos_priority > rhs.options.qos_priority;
+    }
+
+    const zwave_tx_queue_destination_key lhs_destination
+      = zwave_tx_queue_get_destination_key(lhs);
+    const zwave_tx_queue_destination_key rhs_destination
+      = zwave_tx_queue_get_destination_key(rhs);
+
+    if (lhs_destination.is_multicast != rhs_destination.is_multicast) {
+      return lhs_destination.is_multicast < rhs_destination.is_multicast;
+    }
+
+    if (lhs_destination.is_multicast == false) {
+      const uint32_t lhs_score
+        = zwave_tx_route_cache_link_score(lhs_destination.node_id);
+      const uint32_t rhs_score
+        = zwave_tx_route_cache_link_score(rhs_destination.node_id);
+      if (lhs_score != rhs_score) {
+        return lhs_score > rhs_score;
+      }
+    }
+
+    if (lhs_destination.node_id != rhs_destination.node_id) {
+      return lhs_destination.node_id < rhs_destination.node_id;
+    }
+    if (lhs_destination.endpoint_id != rhs_destination.endpoint_id) {
+      return lhs_destination.endpoint_id < rhs_destination.endpoint_id;
+    }
+
+    return lhs.queue_timestamp < rhs.queue_timestamp;
+  }
+};
+
 /** Z-Wave TX Queue class
  *
  * This class is a multiset of zwave_tx_queue_element_t objects,
@@ -205,7 +252,7 @@ class zwave_tx_queue
     NodePredicate is_node_blocked) const
   {
     const_queue_iterator best_match = queue.end();
-    queue_element_qos_compare compare;
+    queue_element_send_compare compare;
 
     for (auto it = queue.begin(); it != queue.end(); ++it) {
       if (is_session_awaiting_response(it->zwave_tx_session_id)) {
@@ -226,7 +273,7 @@ class zwave_tx_queue
       return SL_STATUS_NOT_FOUND;
     }
 
-    memcpy(element, &(*best_match), sizeof(zwave_tx_queue_element_t));
+    std::memcpy(element, &(*best_match), sizeof(zwave_tx_queue_element_t));
     return SL_STATUS_OK;
   }
 

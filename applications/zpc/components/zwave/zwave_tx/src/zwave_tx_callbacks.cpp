@@ -73,12 +73,11 @@ void on_zwave_transport_send_data_complete(uint8_t status,
   if (SL_STATUS_OK != tx_queue.get_by_id(&element, user)) {
     return;
   }
-  if ((element.send_data_tx_status.number_of_repeaters > 0)
-      && (true == IS_TRANSMISSION_SUCCESSFUL(element.send_data_status))
+  if ((true == IS_TRANSMISSION_SUCCESSFUL(element.send_data_status))
       && (false == element.connection_info.remote.is_multicast)) {
-    zwave_tx_route_cache_set_number_of_repeaters(
+    zwave_tx_route_cache_update_from_tx_report(
       element.connection_info.remote.node_id,
-      element.send_data_tx_status.number_of_repeaters);
+      &element.send_data_tx_status);
   }
 
   // Get TX to look at the queue again, now that we are done.
