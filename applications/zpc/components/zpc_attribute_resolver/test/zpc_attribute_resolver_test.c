@@ -26,6 +26,7 @@
 // ZPC Mock includes
 #include "zpc_attribute_store_network_helper_mock.h"
 #include "zwave_tx_mock.h"
+#include "zwave_tx.h"
 #include "zwave_tx_groups_mock.h"
 #include "zwave_command_class_supervision_mock.h"
 #include "zwave_tx_scheme_selector_mock.h"
@@ -134,6 +135,7 @@ void setUp()
   received_send_data_complete = NULL;
   received_user               = NULL;
   custom_handler_calls        = 0;
+  zwave_tx_get_queue_size_IgnoreAndReturn(0);
 }
 
 void test_zpc_attribute_resolver_init()
@@ -156,6 +158,9 @@ void test_zpc_attribute_resolver_init()
 
   TEST_ASSERT_NOT_NULL(set_rule_notification_function);
   set_rule_notification_function(test_type);
+
+  TEST_ASSERT_EQUAL(ZWAVE_TX_QUEUE_BUFFER_SIZE - 1,
+                    received_resolver_config.max_inflight_resolutions);
 }
 
 void test_zpc_attribute_resolver_send_get_happy_case()
@@ -385,6 +390,34 @@ void test_zpc_attribute_resolver_send_send_status_fail_with_supervision()
 
   TEST_ASSERT_NOT_NULL(received_resolver_config.send);
   TEST_ASSERT_EQUAL(SL_STATUS_FAIL,
+                    received_resolver_config.send(test_node,
+                                                  frame_data,
+                                                  sizeof(frame_data),
+                                                  is_set));
+}
+
+void test_zpc_attribute_resolver_send_defers_when_tx_queue_full()
+{
+  attribute_store_node_t test_node = 3;
+  const uint8_t frame_data[]       = {0x9F, 0x22, 0xFF, 0x00, 0x0A, 0x04};
+  bool is_set                      = true;
+
+  attribute_store_network_helper_get_zwave_ids_from_node_ExpectAndReturn(
+    test_node,
+    NULL,
+    NULL,
+    SL_STATUS_OK);
+  attribute_store_network_helper_get_zwave_ids_from_node_IgnoreArg_zwave_node_id();
+  attribute_store_network_helper_get_zwave_ids_from_node_IgnoreArg_zwave_endpoint_id();
+  attribute_store_network_helper_get_zwave_ids_from_node_ReturnThruPtr_zwave_node_id(
+    &zwave_node_id_2);
+  attribute_store_network_helper_get_zwave_ids_from_node_ReturnThruPtr_zwave_endpoint_id(
+    &zwave_endpoint_id_2);
+
+  zwave_tx_get_queue_size_IgnoreAndReturn(ZWAVE_TX_QUEUE_BUFFER_SIZE);
+
+  TEST_ASSERT_NOT_NULL(received_resolver_config.send);
+  TEST_ASSERT_EQUAL(SL_STATUS_NOT_READY,
                     received_resolver_config.send(test_node,
                                                   frame_data,
                                                   sizeof(frame_data),

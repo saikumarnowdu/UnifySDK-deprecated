@@ -31,6 +31,17 @@
 
 #define LOG_TAG "attribute_resolver_send_zwave"
 
+// Leave one TX slot for protocol / abort frames. Resolver fills the rest.
+#define RESOLVER_TX_QUEUE_HEADROOM 1
+
+static bool resolver_tx_queue_has_capacity(void)
+{
+  const int used = zwave_tx_get_queue_size();
+  const int limit
+    = (int)ZWAVE_TX_QUEUE_BUFFER_SIZE - RESOLVER_TX_QUEUE_HEADROOM;
+  return used < limit;
+}
+
 sl_status_t attribute_resolver_send(attribute_store_node_t node,
                                     const uint8_t *frame_data,
                                     uint16_t frame_data_len,
@@ -61,6 +72,16 @@ sl_status_t attribute_resolver_send(attribute_store_node_t node,
                    "node %p. Ignoring",
                    node);
     return SL_STATUS_FAIL;
+  }
+
+  if (false == resolver_tx_queue_has_capacity()) {
+    sl_log_debug(LOG_TAG,
+                 "TX queue at capacity (%d/%d). Deferring resolution of "
+                 "Attribute Store node %p.",
+                 zwave_tx_get_queue_size(),
+                 ZWAVE_TX_QUEUE_BUFFER_SIZE,
+                 node);
+    return SL_STATUS_NOT_READY;
   }
 
   add_node_in_resolution_list(node,
@@ -96,6 +117,18 @@ sl_status_t attribute_resolver_send(attribute_store_node_t node,
       (void *)user,
       &tx_session_id);
     if (send_status != SL_STATUS_OK) {
+      remove_node_from_resolution_list(node);
+      if ((send_status == SL_STATUS_BUSY)
+          || (send_status == SL_STATUS_FULL)
+          || (send_status == SL_STATUS_NOT_READY)
+          || (false == resolver_tx_queue_has_capacity())) {
+        sl_log_debug(LOG_TAG,
+                     "TX queue rejected resolver frame (status 0x%02X). "
+                     "Will retry node %p when a slot is free.",
+                     send_status,
+                     node);
+        return SL_STATUS_NOT_READY;
+      }
       // If we could not queue, just mark the attribute as failed supervision,
       // it will trigger the resolver to try to "get resolve" it again.
       on_resolver_zwave_supervision_complete(SUPERVISION_REPORT_FAIL,
@@ -113,7 +146,19 @@ sl_status_t attribute_resolver_send(attribute_store_node_t node,
                                      &tx_session_id);
 
     if (send_status != SL_STATUS_OK) {
-      // If we could not queue, just mark the attribute as failed transmission.
+      remove_node_from_resolution_list(node);
+      if ((send_status == SL_STATUS_BUSY)
+          || (send_status == SL_STATUS_FULL)
+          || (send_status == SL_STATUS_NOT_READY)
+          || (false == resolver_tx_queue_has_capacity())) {
+        sl_log_debug(LOG_TAG,
+                     "TX queue rejected resolver frame (status 0x%02X). "
+                     "Will retry node %p when a slot is free.",
+                     send_status,
+                     node);
+        return SL_STATUS_NOT_READY;
+      }
+      // Hard failure (empty/oversize/own NodeID, etc.): mark as failed TX.
       on_resolver_zwave_send_data_complete(TRANSMIT_COMPLETE_FAIL,
                                            NULL,
                                            (void *)user);
