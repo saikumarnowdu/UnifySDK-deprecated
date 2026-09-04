@@ -114,10 +114,12 @@ static sl_status_t zwave_api_transport_intercept_payload(
     return SL_STATUS_NOT_SUPPORTED;
   }
 
-  // Intercept NOPs and try to use the Z-Wave API for it
+  // Intercept NOPs and try to use the Z-Wave API for it.
+  // Never set TRANSMIT_OPTION_EXPLORE on NOP: explorer route search can
+  // occupy the NCP for seconds and stall resolver / application traffic.
   if (data[COMMAND_CLASS_INDEX] == ZWAVE_NOP_COMMAND_CLASS) {
-    uint8_t zwapi_tx_options = TRANSMIT_OPTION_ACK | TRANSMIT_OPTION_AUTO_ROUTE
-                               | TRANSMIT_OPTION_EXPLORE;
+    uint8_t zwapi_tx_options
+      = TRANSMIT_OPTION_ACK | TRANSMIT_OPTION_AUTO_ROUTE;
     sl_status_t status = zwapi_send_nop(info->remote.node_id,
                                         zwapi_tx_options,
                                         &zwave_api_send_data_callback);

@@ -41,6 +41,11 @@
 
 constexpr char LOG_TAG[] = "zpc_attribute_resolver_group";
 
+// Identical SET payloads on many nodes used to be packed into Z-Wave multicast
+// plus singlecast follow-ups. That floods the radio once the resolver burst
+// is large (tens/hundreds of SETs). Keep SET resolution on singlecast.
+constexpr bool kResolverMulticastEnabled = false;
+
 // A define for how large can a payload be so that we multicast.
 // We do not want any PHY limitation or even transport service business in a
 // multicast session.
@@ -504,6 +509,10 @@ static sl_status_t
 ///////////////////////////////////////////////////////////////////////////////
 sl_status_t zpc_attribute_resolver_send_group(attribute_store_node_t node)
 {
+  if (!kResolverMulticastEnabled) {
+    return SL_STATUS_NOT_SUPPORTED;
+  }
+
   // No need to check if the tranmsission in ongoing, the zpc_attribute_resolver
   // already verified the node_handles.
 
@@ -589,7 +598,9 @@ static void on_settable_attribute_update(attribute_store_node_t node,
 
   if (attribute_store_is_value_defined(node, DESIRED_ATTRIBUTE) == true
       && attribute_store_is_value_matched(node) == false) {
-    multicast_candidates.insert(node);
+    if (kResolverMulticastEnabled) {
+      multicast_candidates.insert(node);
+    }
   } else {
     multicast_candidates.erase(node);
   }

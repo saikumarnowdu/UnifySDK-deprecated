@@ -42,7 +42,8 @@ sl_status_t attribute_resolver_send(attribute_store_node_t node,
     return SL_STATUS_OK;
   }
 
-  // Else, does the Group send module want to take care of that for us ?
+  // Group send is disabled (singlecast only). Keep the call so it can be
+  // re-enabled in zpc_attribute_resolver_group.cpp without changing this path.
   if (zpc_attribute_resolver_send_group(node) == SL_STATUS_OK) {
     return SL_STATUS_OK;
   }

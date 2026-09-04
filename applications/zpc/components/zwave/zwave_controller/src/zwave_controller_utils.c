@@ -47,6 +47,17 @@ sl_status_t zwave_send_nop_to_node(
   connection_info.remote.node_id                     = node;
   connection_info.encapsulation = ZWAVE_CONTROLLER_ENCAPSULATION_NONE;
 
+  // Do not compete with resolver / application frames. Explorer-backed NOPs
+  // previously stalled bulk SET while the NCP searched for a dead destination.
+  const int queue_size = zwave_tx_get_queue_size();
+  if (queue_size > 0) {
+    sl_log_debug(LOG_TAG,
+                 "TX queue busy (%d). Deferring NOP to Node: %d.",
+                 queue_size,
+                 node);
+    return SL_STATUS_BUSY;
+  }
+
   // Prepare the Z-Wave TX options.
   zwave_tx_options_t tx_options = {0};
   tx_options.qos_priority       = qos_priority;
