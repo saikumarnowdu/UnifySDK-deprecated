@@ -32,7 +32,8 @@
 
 // Unify Components
 #include "sl_log.h"
-// Constants
+#include "zpc_app_trace.h"
+#include <cstdio>
 static constexpr char LOG_TAG[] = "zwave_tx_process";
 
 // Our private variables.
@@ -454,6 +455,16 @@ static void zwave_tx_process_send_next_message_step()
 
   if (transport_status == SL_STATUS_OK) {
     tx_queue.set_transmission_timestamp(current_tx_session_id);
+    char detail[64];
+    snprintf(detail,
+             sizeof(detail),
+             "node=%u queue=%d",
+             (unsigned)current_element.connection_info.remote.node_id,
+             tx_queue.size());
+    zpc_app_trace_event(zpc_app_trace_for_session(current_tx_session_id),
+                        "tx.on_air",
+                        SL_STATUS_OK,
+                        detail);
     return;
   } else {
     // Here we are going to get into a stall...

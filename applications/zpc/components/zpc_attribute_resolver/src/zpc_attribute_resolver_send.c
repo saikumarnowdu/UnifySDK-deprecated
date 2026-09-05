@@ -28,6 +28,7 @@
 #include "zwave_tx.h"
 #include "sl_log.h"
 #include "zwave_utils.h"
+#include "zpc_app_trace.h"
 
 #define LOG_TAG "attribute_resolver_send_zwave"
 
@@ -40,6 +41,20 @@ static bool resolver_tx_queue_has_capacity(void)
   const int limit
     = (int)ZWAVE_TX_QUEUE_BUFFER_SIZE - RESOLVER_TX_QUEUE_HEADROOM;
   return used < limit;
+}
+
+static zpc_trace_id_t resolver_trace_start(attribute_store_node_t node,
+                                           zwave_node_id_t node_id,
+                                           bool is_set)
+{
+  zpc_trace_id_t id = zpc_app_trace_for_attr((uintptr_t)node);
+  if (id == 0) {
+    id = zpc_app_trace_begin(is_set ? "resolver.SET" : "resolver.GET",
+                             node_id,
+                             (uintptr_t)node);
+  }
+  zpc_app_trace_set_current(id);
+  return id;
 }
 
 sl_status_t attribute_resolver_send(attribute_store_node_t node,
@@ -74,6 +89,8 @@ sl_status_t attribute_resolver_send(attribute_store_node_t node,
     return SL_STATUS_FAIL;
   }
 
+  const zpc_trace_id_t trace_id = resolver_trace_start(node, node_id, is_set);
+
   if (false == resolver_tx_queue_has_capacity()) {
     sl_log_debug(LOG_TAG,
                  "TX queue at capacity (%d/%d). Deferring resolution of "
@@ -81,6 +98,11 @@ sl_status_t attribute_resolver_send(attribute_store_node_t node,
                  zwave_tx_get_queue_size(),
                  ZWAVE_TX_QUEUE_BUFFER_SIZE,
                  node);
+    zpc_app_trace_event(trace_id,
+                        "resolver.defer",
+                        SL_STATUS_NOT_READY,
+                        "tx_queue_full");
+    zpc_app_trace_set_current(0);
     return SL_STATUS_NOT_READY;
   }
 
@@ -127,6 +149,11 @@ sl_status_t attribute_resolver_send(attribute_store_node_t node,
                      "Will retry node %p when a slot is free.",
                      send_status,
                      node);
+        zpc_app_trace_event(trace_id,
+                            "resolver.defer",
+                            send_status,
+                            "tx_rejected");
+        zpc_app_trace_set_current(0);
         return SL_STATUS_NOT_READY;
       }
       // If we could not queue, just mark the attribute as failed supervision,
@@ -156,6 +183,11 @@ sl_status_t attribute_resolver_send(attribute_store_node_t node,
                      "Will retry node %p when a slot is free.",
                      send_status,
                      node);
+        zpc_app_trace_event(trace_id,
+                            "resolver.defer",
+                            send_status,
+                            "tx_rejected");
+        zpc_app_trace_set_current(0);
         return SL_STATUS_NOT_READY;
       }
       // Hard failure (empty/oversize/own NodeID, etc.): mark as failed TX.
@@ -167,7 +199,9 @@ sl_status_t attribute_resolver_send(attribute_store_node_t node,
 
   if (send_status == SL_STATUS_OK) {
     attribute_resolver_associate_node_with_tx_sessions_id(node, tx_session_id);
+    zpc_app_trace_bind_session(tx_session_id, trace_id);
   }
+  zpc_app_trace_set_current(0);
   return send_status;
 }
 
@@ -178,4 +212,5 @@ void attribute_resolver_send_init()
 {
   // Reset our list of pending nodes/resolutions
   attribute_resolver_callbacks_reset();
+  zpc_app_trace_init();
 }

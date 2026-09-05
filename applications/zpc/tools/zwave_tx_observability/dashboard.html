@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>ZPC resolver → TX queue</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2330;
+      --line: #2b3a4d;
+      --text: #e7eef7;
+      --muted: #8aa0b8;
+      --queued: #3b82f6;
+      --send: #f59e0b;
+      --done: #22c55e;
+      --wait: #64748b;
+      --defer: #a78bfa;
+      --fl: #f97316;
+      --al: #38bdf8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: ui-sans-serif, system-ui, sans-serif;
+      background: var(--bg); color: var(--text);
+    }
+    header {
+      display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+      padding: 14px 18px; border-bottom: 1px solid var(--line);
+      background: #121a24;
+    }
+    h1 { font-size: 16px; margin: 0; font-weight: 600; }
+    .sub { color: var(--muted); font-size: 12px; }
+    button {
+      background: #243044; color: var(--text); border: 1px solid var(--line);
+      border-radius: 6px; padding: 6px 10px; cursor: pointer; font-size: 13px;
+    }
+    button:hover { background: #2d3d55; }
+    button.primary { background: #1d4ed8; border-color: #2563eb; }
+    main { display: grid; grid-template-columns: 1.3fr 0.9fr; gap: 12px; padding: 12px; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+    .kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-bottom: 12px; }
+    .kpi { background: #121a24; border-radius: 8px; padding: 8px; }
+    .kpi b { display: block; font-size: 20px; }
+    .kpi span { color: var(--muted); font-size: 11px; }
+    .bar { height: 14px; background: #0b1016; border-radius: 8px; overflow: hidden; margin: 6px 0 10px; }
+    .bar > i { display: block; height: 100%; background: linear-gradient(90deg, #22c55e, #f59e0b, #ef4444); width: 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); font-weight: 500; }
+    .grid { display: flex; flex-wrap: wrap; gap: 3px; max-height: 280px; overflow: auto; }
+    .cell {
+      width: 18px; height: 18px; border-radius: 3px; font-size: 9px;
+      display: flex; align-items: center; justify-content: center; color: #0b1016;
+    }
+    .idle { background: #243044; color: var(--muted); }
+    .pending { background: var(--wait); color: #fff; }
+    .queued { background: var(--queued); color: #fff; }
+    .sending { background: var(--send); color: #111; }
+    .done { background: var(--done); }
+    .deferred { background: var(--defer); color: #111; }
+    .events { font-family: ui-monospace, monospace; font-size: 11px; height: 340px; overflow: auto; }
+    .events div { padding: 2px 0; border-bottom: 1px solid #223044; color: #c5d4e6; }
+    .legend { display: flex; gap: 10px; flex-wrap: wrap; font-size: 11px; color: var(--muted); margin: 8px 0; }
+    .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; }
+    canvas { width: 100%; height: 72px; background: #121a24; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Resolver → TX queue observability</h1>
+      <div class="sub">Local simulation of ZPC pacing and send-order. No NCP deploy required.</div>
+    </div>
+    <button class="primary" onclick="post('burst')">Burst 232 SETs</button>
+    <button onclick="post('second-burst')">Second burst (use radio cache)</button>
+    <button onclick="post('seed')">Seed last-TX metrics</button>
+    <button onclick="post('pause')">Pause / resume</button>
+    <button onclick="post('reset')">Reset</button>
+    <label class="sub">Speed
+      <input id="speed" type="range" min="1" max="50" value="8" onchange="post('speed?x='+this.value)" />
+    </label>
+  </header>
+  <main>
+    <section class="panel">
+      <div class="kpis">
+        <div class="kpi"><span>Queue</span><b id="qsize">0 / 64</b></div>
+        <div class="kpi"><span>Requested</span><b id="req">0</b></div>
+        <div class="kpi"><span>Deferred</span><b id="def">0</b></div>
+        <div class="kpi"><span>Sending</span><b id="snd">—</b></div>
+        <div class="kpi"><span>Completed</span><b id="done">0</b></div>
+        <div class="kpi"><span>Sim time</span><b id="t">0 ms</b></div>
+      </div>
+      <div class="sub">Resolver fills 63 slots and leaves 1 for protocol. Full queue returns NOT_READY (defer), not FAIL.</div>
+      <div class="bar"><i id="qbar"></i></div>
+      <canvas id="spark" width="900" height="72"></canvas>
+      <div class="legend">
+        <span><i class="idle"></i>idle</span>
+        <span><i class="pending"></i>resolver pending</span>
+        <span><i class="deferred"></i>deferred (queue full)</span>
+        <span><i class="queued"></i>in TX queue</span>
+        <span><i class="sending"></i>on air</span>
+        <span><i class="done"></i>TX complete</span>
+      </div>
+      <div class="grid" id="grid"></div>
+      <h3 class="sub" style="margin:12px 0 6px">TX queue (send-time order)</h3>
+      <div style="max-height:220px;overflow:auto">
+        <table>
+          <thead><tr><th>#</th><th>Node</th><th>Role</th><th>QoS</th><th>Score</th><th>Hops</th><th>Speed</th><th>RSSI</th><th>Beam</th></tr></thead>
+          <tbody id="qbody"></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="panel">
+      <h3 class="sub" style="margin:0 0 8px">Event stream</h3>
+      <div class="events" id="events"></div>
+    </section>
+  </main>
+  <script>
+    const spark = [];
+    async function post(path) {
+      await fetch('/api/' + path, { method: 'POST' });
+    }
+    function drawSpark() {
+      const c = document.getElementById('spark').getContext('2d');
+      const w = c.canvas.width, h = c.canvas.height;
+      c.clearRect(0, 0, w, h);
+      c.strokeStyle = '#38bdf8';
+      c.beginPath();
+      spark.forEach((v, i) => {
+        const x = (i / Math.max(spark.length - 1, 1)) * w;
+        const y = h - (v / 64) * (h - 8) - 4;
+        i ? c.lineTo(x, y) : c.moveTo(x, y);
+      });
+      c.stroke();
+    }
+    async function tick() {
+      const s = await (await fetch('/api/state')).json();
+      document.getElementById('qsize').textContent = s.queue_size + ' / ' + s.queue_capacity;
+      document.getElementById('req').textContent = s.counts.requested;
+      document.getElementById('def').textContent = s.counts.deferred_current;
+      document.getElementById('snd').textContent = s.current_send ? ('N' + s.current_send.node_id) : 'idle';
+      document.getElementById('done').textContent = s.counts.completed;
+      document.getElementById('t').textContent = s.sim_ms + ' ms';
+      document.getElementById('qbar').style.width = (100 * s.queue_size / s.queue_capacity) + '%';
+      spark.push(s.queue_size);
+      if (spark.length > 120) spark.shift();
+      drawSpark();
+      const grid = document.getElementById('grid');
+      if (grid.childElementCount !== s.nodes.length) {
+        grid.innerHTML = s.nodes.map(n => `<div class="cell idle" id="n${n.id}" title="Node ${n.id}">${n.id}</div>`).join('');
+      }
+      s.nodes.forEach(n => {
+        const el = document.getElementById('n' + n.id);
+        if (el) {
+          el.className = 'cell ' + n.state;
+          el.title = `Node ${n.id} ${n.role} score=${n.score} hops=${n.hops} ${n.speed} rssi=${n.rssi} ${n.beam ? 'BEAM' : ''}`;
+        }
+      });
+      document.getElementById('qbody').innerHTML = s.queue.map((e, i) =>
+        `<tr><td>${i + 1}</td><td>${e.node_id}</td><td>${e.role}</td><td>${e.qos}</td><td>${e.score}</td><td>${e.hops}</td><td>${e.speed}</td><td>${e.rssi}</td><td>${e.beam ? 'yes' : ''}</td></tr>`
+      ).join('');
+      document.getElementById('events').innerHTML = s.events.slice().reverse().map(e =>
+        `<div>${e.ts_ms}ms  ${e.type}  ${e.detail}</div>`
+      ).join('');
+    }
+    setInterval(tick, 250);
+    tick();
+  </script>
+</body>
+</html>

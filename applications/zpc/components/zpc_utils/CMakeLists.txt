@@ -1,5 +1,5 @@
 add_library(zpc_utils src/zpc_converters.c src/zpc_hex_to_int.c
-                      src/zwave_unid.c)
+                      src/zwave_unid.c src/zpc_app_trace.c)
 
 target_include_directories(zpc_utils PUBLIC include)
 
