@@ -10,3 +10,9 @@ target_add_unittest(
   zpc_converters_test
   SOURCES
   zpc_converters_test.c)
+target_add_unittest(
+  zpc_utils
+  NAME
+  zpc_app_trace_test
+  SOURCES
+  zpc_app_trace_test.c)

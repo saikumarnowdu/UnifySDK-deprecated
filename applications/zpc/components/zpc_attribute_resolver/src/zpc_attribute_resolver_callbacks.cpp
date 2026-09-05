@@ -12,6 +12,7 @@
  *****************************************************************************/
 #include "zpc_attribute_resolver.h"
 #include "zpc_attribute_resolver_callbacks.h"
+#include "zpc_app_trace.h"
 
 // Unify Components
 #include "sl_log.h"
@@ -24,6 +25,20 @@
 #include <map>
 
 constexpr char LOG_TAG[] = "zpc_attribute_resolver";
+
+static void resolver_trace_finish(attribute_store_node_t node,
+                                  const char *result,
+                                  bool end_trace)
+{
+  const zpc_trace_id_t trace_id = zpc_app_trace_for_attr((uintptr_t)node);
+  zpc_app_trace_event(trace_id,
+                      "resolver.complete",
+                      SL_STATUS_OK,
+                      result);
+  if (end_trace) {
+    zpc_app_trace_end(trace_id, result);
+  }
+}
 
 typedef struct node_data {
   resolver_rule_type_t rule_type;
@@ -111,6 +126,9 @@ void on_resolver_zwave_send_data_complete(uint8_t status,
   }
 
   // Clear up the node resolution slot
+  resolver_trace_finish(current_node,
+                        (rs == RESOLVER_SEND_STATUS_FAIL) ? "fail" : "ok",
+                        true);
   remove_node_from_resolution_list(current_node);
 }
 
@@ -176,7 +194,12 @@ void on_resolver_zwave_supervision_complete(uint8_t supervision_status,
 
   // Clear up the node resolution slot, if the session is over
   if (supervision_status != SUPERVISION_REPORT_WORKING) {
+    resolver_trace_finish(current_node,
+                          (rs == RESOLVER_SEND_STATUS_FAIL) ? "fail" : "ok",
+                          true);
     remove_node_from_resolution_list(current_node);
+  } else {
+    resolver_trace_finish(current_node, "working", false);
   }
 }
 

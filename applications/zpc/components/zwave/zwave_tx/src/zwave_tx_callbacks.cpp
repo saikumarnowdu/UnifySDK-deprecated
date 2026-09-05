@@ -17,6 +17,7 @@
 #include "zwave_tx_process.h"
 #include "zwave_tx_route_cache.h"
 #include "zwave_tx_queue.hpp"
+#include "zpc_app_trace.h"
 
 // Includes from other components
 #include "zwave_helper_macros.h"
@@ -28,6 +29,7 @@
 
 // Generic includes
 #include <string.h>
+#include <cstdio>
 
 #define LOG_TAG "zwave_tx_callbacks"
 
@@ -79,6 +81,14 @@ void on_zwave_transport_send_data_complete(uint8_t status,
       element.connection_info.remote.node_id,
       &element.send_data_tx_status);
   }
+
+  const zpc_trace_id_t trace_id = zpc_app_trace_for_session(user);
+  char detail[40];
+  snprintf(detail, sizeof(detail), "radio_status=%u", status);
+  zpc_app_trace_event(trace_id, "tx.complete", SL_STATUS_OK, detail);
+  zpc_app_trace_end_if_no_attr(
+    trace_id,
+    IS_TRANSMISSION_SUCCESSFUL(element.send_data_status) ? "ok" : "fail");
 
   // Get TX to look at the queue again, now that we are done.
   process_post(&zwave_tx_process, ZWAVE_TX_SEND_OPERATION_COMPLETE, user);

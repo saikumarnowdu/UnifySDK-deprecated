@@ -22,9 +22,11 @@
 #include "zwave_tx_groups.h"
 #include "zwave_controller_callbacks.h"
 #include "zwapi_protocol_mem.h"
+#include "zpc_app_trace.h"
 
 // Generic includes
 #include <cstring>  // Using memcpy
+#include <cstdio>
 
 // Setup the logging
 constexpr char LOG_TAG[] = "zwave_tx";
@@ -135,6 +137,26 @@ sl_status_t
   }
 
   if (SL_STATUS_OK == tx_queue.enqueue(new_element, session)) {
+    zpc_trace_id_t trace_id = zpc_app_trace_current();
+    if (trace_id == 0 && session != nullptr) {
+      trace_id = zpc_app_trace_for_session(*session);
+    }
+    if (trace_id == 0) {
+      trace_id = zpc_app_trace_begin(
+        "tx.frame",
+        new_element.connection_info.remote.node_id,
+        0);
+    }
+    if (session != nullptr) {
+      zpc_app_trace_bind_session(*session, trace_id);
+    }
+    char detail[48];
+    snprintf(detail,
+             sizeof(detail),
+             "queue=%d qos=%u",
+             zwave_tx_get_queue_size(),
+             (unsigned)new_element.options.qos_priority);
+    zpc_app_trace_event(trace_id, "tx.enqueue", SL_STATUS_OK, detail);
     zwave_tx_process_check_queue();
     return SL_STATUS_OK;
   }

@@ -17,7 +17,7 @@ target_include_directories(
 target_link_libraries(
   zwave_tx
   PUBLIC unify zwave_tx_groups zwave_definitions zwave_api
-  PRIVATE zwave_controller)
+  PRIVATE zwave_controller zpc_utils)
 install(TARGETS zwave_tx LIBRARY DESTINATION lib)
 
 if(BUILD_TESTING)
